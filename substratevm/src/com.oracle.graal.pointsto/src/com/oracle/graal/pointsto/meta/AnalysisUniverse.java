@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -188,14 +190,14 @@ public class AnalysisUniverse implements Universe {
         ResolvedJavaType type = substitutions.lookup(hostType);
         AnalysisType result = optionalLookup(type);
         if (result == null) {
-            result = createType(type, hostType);
+            result = createType(type);
         }
         assert typesById[result.getId()].equals(result);
         return result;
     }
 
     @SuppressFBWarnings(value = {"ES_COMPARING_STRINGS_WITH_EQ"}, justification = "Bug in findbugs")
-    private AnalysisType createType(ResolvedJavaType type, ResolvedJavaType hostType) {
+    private AnalysisType createType(ResolvedJavaType type) {
         if (!hostVM.platformSupported(type)) {
             throw new UnsupportedFeatureException("type is not available in this platform: " + type.toJavaName(true));
         }
@@ -205,10 +207,6 @@ public class AnalysisUniverse implements Universe {
              * closed world analysis.
              */
             throw AnalysisError.typeNotFound(type);
-        }
-
-        if (!type.isArray() && !type.isPrimitive()) {
-            type.initialize();
         }
 
         /*
@@ -251,7 +249,7 @@ public class AnalysisUniverse implements Universe {
         try {
             JavaKind storageKind = getStorageKind(type, originalMetaAccess, getTarget());
             AnalysisType newValue = new AnalysisType(this, type, storageKind, objectClass);
-            hostVM.registerType(newValue, hostType);
+            hostVM.registerType(newValue);
 
             synchronized (this) {
                 /*
@@ -606,5 +604,10 @@ public class AnalysisUniverse implements Universe {
 
     public SnippetReflectionProvider getOriginalSnippetReflection() {
         return originalSnippetReflection;
+    }
+
+    @Override
+    public ResolvedJavaMethod resolveSubstitution(ResolvedJavaMethod method) {
+        return substitutions.resolve(method);
     }
 }

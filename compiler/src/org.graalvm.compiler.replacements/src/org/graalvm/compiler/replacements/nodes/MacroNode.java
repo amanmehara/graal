@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -153,7 +155,7 @@ public abstract class MacroNode extends FixedWithNextNode implements Lowerable, 
     @SuppressWarnings("try")
     protected StructuredGraph lowerReplacement(final StructuredGraph replacementGraph, LoweringTool tool) {
         final PhaseContext c = new PhaseContext(tool.getMetaAccess(), tool.getConstantReflection(), tool.getConstantFieldProvider(), tool.getLowerer(), tool.getReplacements(),
-                        tool.getStampProvider());
+                        tool.getStampProvider(), null);
         if (!graph().hasValueProxies()) {
             new RemoveValueProxyPhase().apply(replacementGraph);
         }
@@ -189,7 +191,7 @@ public abstract class MacroNode extends FixedWithNextNode implements Lowerable, 
                     ((Lowerable) nonNullReceiver).lower(tool);
                 }
             }
-            InliningUtil.inline(invoke, replacementGraph, false, targetMethod);
+            InliningUtil.inline(invoke, replacementGraph, false, targetMethod, "Replace with graph.", "LoweringPhase");
             replacementGraph.getDebug().dump(DebugContext.DETAILED_LEVEL, graph(), "After inlining replacement %s", replacementGraph);
         } else {
             if (isPlaceholderBci(invoke.bci())) {

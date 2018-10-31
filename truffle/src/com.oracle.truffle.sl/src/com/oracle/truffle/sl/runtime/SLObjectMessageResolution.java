@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,11 +41,12 @@
 package com.oracle.truffle.sl.runtime;
 
 import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.interop.ForeignAccess;
 import com.oracle.truffle.api.interop.KeyInfo;
 import com.oracle.truffle.api.interop.MessageResolution;
 import com.oracle.truffle.api.interop.Resolve;
+import com.oracle.truffle.api.interop.TruffleObject;
 import com.oracle.truffle.api.interop.UnknownIdentifierException;
-import com.oracle.truffle.api.interop.java.JavaInterop;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.object.DynamicObject;
 import com.oracle.truffle.sl.nodes.access.SLReadPropertyCacheNode;
@@ -56,8 +57,6 @@ import com.oracle.truffle.sl.nodes.call.SLDispatchNode;
 import com.oracle.truffle.sl.nodes.call.SLDispatchNodeGen;
 import com.oracle.truffle.sl.nodes.interop.SLForeignToSLTypeNode;
 import com.oracle.truffle.sl.nodes.interop.SLForeignToSLTypeNodeGen;
-import com.oracle.truffle.sl.nodes.interop.SLTypeToForeignNode;
-import com.oracle.truffle.sl.nodes.interop.SLTypeToForeignNodeGen;
 
 /**
  * The class containing all message resolution implementations of an SL object.
@@ -94,7 +93,6 @@ public class SLObjectMessageResolution {
 
         @Child private SLReadPropertyCacheNode read = SLReadPropertyCacheNodeGen.create();
         @Child private SLForeignToSLTypeNode nameToSLType = SLForeignToSLTypeNodeGen.create();
-        @Child private SLTypeToForeignNode toForeign = SLTypeToForeignNodeGen.create();
 
         public Object access(DynamicObject receiver, Object name) {
             Object convertedName = nameToSLType.executeConvert(name);
@@ -104,7 +102,7 @@ public class SLObjectMessageResolution {
             } catch (SLUndefinedNameException undefinedName) {
                 throw UnknownIdentifierException.raise(String.valueOf(convertedName));
             }
-            return toForeign.executeConvert(result);
+            return result;
         }
     }
 
@@ -135,7 +133,6 @@ public class SLObjectMessageResolution {
     public abstract static class SLForeignInvokeNode extends Node {
 
         @Child private SLDispatchNode dispatch = SLDispatchNodeGen.create();
-        @Child private SLTypeToForeignNode toForeign = SLTypeToForeignNodeGen.create();
 
         public Object access(DynamicObject receiver, String name, Object[] arguments) {
             Object property = receiver.get(name);
@@ -149,7 +146,7 @@ public class SLObjectMessageResolution {
                     arr[i] = SLContext.fromForeignValue(arguments[i]);
                 }
                 Object result = dispatch.executeDispatch(function, arr);
-                return toForeign.executeConvert(result);
+                return result;
             } else {
                 throw UnknownIdentifierException.raise(name);
             }
@@ -168,17 +165,14 @@ public class SLObjectMessageResolution {
     @Resolve(message = "KEY_INFO")
     public abstract static class SLForeignPropertyInfoNode extends Node {
 
-        private static final int PROPERTY_INFO = KeyInfo.newBuilder().setReadable(true).setRemovable(true).setWritable(true).build();
-        private static final int PROPERTY_FUNCTION_INFO = KeyInfo.newBuilder().setReadable(true).setRemovable(true).setWritable(true).setInvocable(true).build();
-
         public int access(DynamicObject receiver, Object name) {
             Object property = receiver.get(name);
             if (property == null) {
-                return 0;
+                return KeyInfo.INSERTABLE;
             } else if (property instanceof SLFunction) {
-                return PROPERTY_FUNCTION_INFO;
+                return KeyInfo.READABLE | KeyInfo.REMOVABLE | KeyInfo.MODIFIABLE | KeyInfo.INVOCABLE;
             } else {
-                return PROPERTY_INFO;
+                return KeyInfo.READABLE | KeyInfo.REMOVABLE | KeyInfo.MODIFIABLE;
             }
         }
     }
@@ -192,8 +186,59 @@ public class SLObjectMessageResolution {
         @CompilerDirectives.TruffleBoundary
         private static Object obtainKeys(DynamicObject receiver) {
             Object[] keys = receiver.getShape().getKeyList().toArray();
-            return JavaInterop.asTruffleObject(keys);
+            return new KeysArray(keys);
         }
+    }
+
+    @MessageResolution(receiverType = KeysArray.class)
+    static final class KeysArray implements TruffleObject {
+
+        private final Object[] keys;
+
+        KeysArray(Object[] keys) {
+            this.keys = keys;
+        }
+
+        @Resolve(message = "HAS_SIZE")
+        abstract static class HasSize extends Node {
+
+            public Object access(@SuppressWarnings("unused") KeysArray receiver) {
+                return true;
+            }
+        }
+
+        @Resolve(message = "GET_SIZE")
+        abstract static class GetSize extends Node {
+
+            public Object access(KeysArray receiver) {
+                return receiver.keys.length;
+            }
+        }
+
+        @Resolve(message = "READ")
+        abstract static class Read extends Node {
+
+            public Object access(KeysArray receiver, int index) {
+                try {
+                    Object key = receiver.keys[index];
+                    assert key instanceof String;
+                    return key;
+                } catch (IndexOutOfBoundsException e) {
+                    CompilerDirectives.transferToInterpreter();
+                    throw UnknownIdentifierException.raise(String.valueOf(index));
+                }
+            }
+        }
+
+        @Override
+        public ForeignAccess getForeignAccess() {
+            return KeysArrayForeign.ACCESS;
+        }
+
+        static boolean isInstance(TruffleObject array) {
+            return array instanceof KeysArray;
+        }
+
     }
 
 }

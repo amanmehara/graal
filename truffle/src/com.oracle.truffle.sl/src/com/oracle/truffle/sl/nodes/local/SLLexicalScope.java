@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,7 +40,6 @@
  */
 package com.oracle.truffle.sl.nodes.local;
 
-import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -53,6 +52,7 @@ import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.FrameSlot;
 import com.oracle.truffle.api.interop.ForeignAccess;
+import com.oracle.truffle.api.interop.KeyInfo;
 import com.oracle.truffle.api.interop.Message;
 import com.oracle.truffle.api.interop.MessageResolution;
 import com.oracle.truffle.api.interop.Resolve;
@@ -63,9 +63,10 @@ import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.NodeUtil;
 import com.oracle.truffle.api.nodes.NodeVisitor;
 import com.oracle.truffle.api.nodes.RootNode;
+import com.oracle.truffle.sl.nodes.SLEvalRootNode;
 import com.oracle.truffle.sl.nodes.SLStatementNode;
 import com.oracle.truffle.sl.nodes.controlflow.SLBlockNode;
-import com.oracle.truffle.sl.runtime.SLBigNumber;
+import com.oracle.truffle.sl.runtime.SLNull;
 
 /**
  * Simple language lexical scope. There can be a block scope, or function scope.
@@ -81,7 +82,7 @@ public final class SLLexicalScope {
 
     /**
      * Create a new block SL lexical scope.
-     * 
+     *
      * @param current the current node
      * @param block a nearest block enclosing the current node
      * @param parentBlock a next parent block
@@ -95,7 +96,7 @@ public final class SLLexicalScope {
 
     /**
      * Create a new functional SL lexical scope.
-     * 
+     *
      * @param current the current node, or <code>null</code> when it would be above the block
      * @param block a nearest block enclosing the current node
      * @param root a functional root node for top-most block
@@ -115,7 +116,7 @@ public final class SLLexicalScope {
             block = findChildrenBlock(node);
             if (block == null) {
                 // Corrupted SL AST, no block was found
-                assert false : "Corrupted SL AST under " + node;
+                assert node.getRootNode() instanceof SLEvalRootNode : "Corrupted SL AST under " + node;
                 return new SLLexicalScope(null, null, (SLBlockNode) null);
             }
             node = null; // node is above the block
@@ -177,23 +178,6 @@ public final class SLLexicalScope {
             }
         }
         return parent;
-    }
-
-    private static Object getInteropValue(Object value) {
-        if (value instanceof BigInteger) {
-            return new SLBigNumber((BigInteger) value);
-        } else {
-            return value;
-        }
-    }
-
-    private static Object getRawValue(Object interopValue, Object oldValue) {
-        if (interopValue instanceof SLBigNumber) {
-            if (oldValue instanceof BigInteger) {
-                return ((SLBigNumber) interopValue).getValue();
-            }
-        }
-        return interopValue;
     }
 
     /**
@@ -374,25 +358,42 @@ public final class SLLexicalScope {
                 }
             }
 
+            @Resolve(message = "KEY_INFO")
+            abstract static class KeyInfoNode extends Node {
+
+                @TruffleBoundary
+                public int access(VariablesMapObject varMap, String name) {
+                    if (varMap.frame == null) {
+                        return KeyInfo.READABLE;
+                    }
+                    FrameSlot slot = varMap.slots.get(name);
+                    if (slot != null) {
+                        return KeyInfo.READABLE | KeyInfo.MODIFIABLE;
+                    }
+                    return KeyInfo.NONE;
+                }
+            }
+
             @Resolve(message = "READ")
             abstract static class VarsMapReadNode extends Node {
 
                 @TruffleBoundary
                 public Object access(VariablesMapObject varMap, String name) {
                     if (varMap.frame == null) {
-                        throw UnsupportedMessageException.raise(Message.READ);
+                        return SLNull.SINGLETON;
                     }
                     FrameSlot slot = varMap.slots.get(name);
                     if (slot == null) {
                         throw UnknownIdentifierException.raise(name);
                     } else {
                         Object value;
-                        if (varMap.args != null && varMap.args.length > slot.getIndex()) {
-                            value = varMap.args[slot.getIndex()];
+                        Object info = slot.getInfo();
+                        if (varMap.args != null && info != null) {
+                            value = varMap.args[(Integer) info];
                         } else {
                             value = varMap.frame.getValue(slot);
                         }
-                        return getInteropValue(value);
+                        return value;
                     }
                 }
             }
@@ -409,12 +410,11 @@ public final class SLLexicalScope {
                     if (slot == null) {
                         throw UnknownIdentifierException.raise(name);
                     } else {
-                        if (varMap.args != null && varMap.args.length > slot.getIndex()) {
-                            Object valueOld = varMap.args[slot.getIndex()];
-                            varMap.args[slot.getIndex()] = getRawValue(value, valueOld);
+                        Object info = slot.getInfo();
+                        if (varMap.args != null && info != null) {
+                            varMap.args[(Integer) info] = value;
                         } else {
-                            Object valueOld = varMap.frame.getValue(slot);
-                            varMap.frame.setObject(slot, getRawValue(value, valueOld));
+                            varMap.frame.setObject(slot, value);
                         }
                         return value;
                     }

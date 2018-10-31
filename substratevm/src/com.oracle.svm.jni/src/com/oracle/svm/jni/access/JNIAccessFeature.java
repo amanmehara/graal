@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -24,9 +26,6 @@ package com.oracle.svm.jni.access;
 
 // Checkstyle: allow reflection
 
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.Reader;
 import java.lang.reflect.Executable;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
@@ -40,6 +39,8 @@ import java.util.stream.Stream;
 import org.graalvm.compiler.api.replacements.Fold;
 import org.graalvm.nativeimage.Feature;
 import org.graalvm.nativeimage.ImageSingletons;
+import org.graalvm.nativeimage.impl.ReflectionRegistry;
+import org.graalvm.nativeimage.impl.RuntimeReflectionSupport;
 
 import com.oracle.graal.pointsto.BigBang;
 import com.oracle.graal.pointsto.flow.FieldTypeFlow;
@@ -47,8 +48,6 @@ import com.oracle.graal.pointsto.flow.TypeFlow;
 import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
-import com.oracle.svm.core.RuntimeReflection;
-import com.oracle.svm.core.RuntimeReflection.RuntimeReflectionSupport;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.hosted.FeatureImpl.AfterRegistrationAccessImpl;
@@ -57,13 +56,12 @@ import com.oracle.svm.hosted.FeatureImpl.CompilationAccessImpl;
 import com.oracle.svm.hosted.FeatureImpl.DuringAnalysisAccessImpl;
 import com.oracle.svm.hosted.c.NativeLibraries;
 import com.oracle.svm.hosted.config.ReflectionConfigurationParser;
-import com.oracle.svm.hosted.option.HostedOptionParser;
+import com.oracle.svm.hosted.jni.JNIRuntimeAccess.JNIRuntimeAccessibilitySupport;
+import com.oracle.svm.hosted.meta.MaterializedConstantFields;
 import com.oracle.svm.jni.JNIJavaCallWrappers;
 import com.oracle.svm.jni.hosted.JNICallTrampolineMethod;
-import com.oracle.svm.jni.hosted.JNIFeature.Options;
 import com.oracle.svm.jni.hosted.JNIJavaCallWrapperMethod;
 import com.oracle.svm.jni.hosted.JNIJavaCallWrapperMethod.CallVariant;
-import com.oracle.svm.jni.hosted.JNIRuntimeAccess.JNIRuntimeAccessibilitySupport;
 
 import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaField;
@@ -91,7 +89,7 @@ public class JNIAccessFeature implements Feature {
 
     private final Set<Class<?>> newClasses = Collections.newSetFromMap(new ConcurrentHashMap<>());
     private final Set<Executable> newMethods = Collections.newSetFromMap(new ConcurrentHashMap<>());
-    private final Set<Field> newFields = Collections.newSetFromMap(new ConcurrentHashMap<>());
+    private final Map<Field, Boolean> newFields = new ConcurrentHashMap<>();
     private final Map<JNINativeLinkage, JNINativeLinkage> newLinkages = new ConcurrentHashMap<>();
 
     private final Map<JNINativeLinkage, JNINativeLinkage> nativeLinkages = new ConcurrentHashMap<>();
@@ -112,34 +110,10 @@ public class JNIAccessFeature implements Feature {
         ImageSingletons.add(JNIRuntimeAccessibilitySupport.class, registry);
 
         ReflectionConfigurationParser parser = new ReflectionConfigurationParser(registry, access.getImageClassLoader());
-        String configFiles = Options.JNIConfigurationFiles.getValue();
-        if (!configFiles.isEmpty()) {
-            for (String file : configFiles.split(",")) {
-                try {
-                    parser.parseAndRegister(file);
-                } catch (Exception e) {
-                    throw UserError.abort("Could not parse JNI configuration file \"" + file + "\". Verify that the file exists and its contents match the expected schema (see " +
-                                    HostedOptionParser.HOSTED_OPTION_PREFIX + SubstrateOptions.PrintFlags.getName() + " for option " + Options.JNIConfigurationFiles.getName() + ").\n" +
-                                    e.toString());
-                }
-            }
-        }
-        String configResources = Options.JNIConfigurationResources.getValue();
-        if (!configResources.isEmpty()) {
-            for (String resource : configResources.split(",")) {
-                InputStream stream = access.getImageClassLoader().findResourceByName(resource);
-                try (Reader reader = new InputStreamReader(stream)) {
-                    parser.parseAndRegister(reader);
-                } catch (Exception e) {
-                    throw UserError.abort("Could not parse JNI configuration resource \"" + resource + "\". Verify that the resource exists and its contents match the expected schema (see " +
-                                    HostedOptionParser.HOSTED_OPTION_PREFIX + SubstrateOptions.PrintFlags.getName() + " for option " + Options.JNIConfigurationResources.getName() + ").\n" +
-                                    e.toString());
-                }
-            }
-        }
+        parser.parseAndRegisterConfigurations("JNI", SubstrateOptions.JNIConfigurationFiles, SubstrateOptions.JNIConfigurationResources);
     }
 
-    private class JNIRuntimeAccessibilitySupportImpl implements JNIRuntimeAccessibilitySupport, RuntimeReflection.ReflectionRegistry {
+    private class JNIRuntimeAccessibilitySupportImpl implements JNIRuntimeAccessibilitySupport, ReflectionRegistry {
         @Override
         public void register(Class<?>... classes) {
             abortIfSealed();
@@ -153,9 +127,12 @@ public class JNIAccessFeature implements Feature {
         }
 
         @Override
-        public void register(Field... fields) {
+        public void register(boolean finalIsWritable, Field... fields) {
             abortIfSealed();
-            newFields.addAll(Arrays.asList(fields));
+            for (Field field : fields) {
+                boolean writable = finalIsWritable || !Modifier.isFinal(field.getModifiers());
+                newFields.put(field, writable);
+            }
         }
     }
 
@@ -226,9 +203,9 @@ public class JNIAccessFeature implements Feature {
         }
         newMethods.clear();
 
-        for (Field field : newFields) {
-            addField(field, access);
-        }
+        newFields.forEach((field, writable) -> {
+            addField(field, writable, access);
+        });
         newFields.clear();
 
         JNIReflectionDictionary.singleton().addLinkages(newLinkages);
@@ -261,7 +238,7 @@ public class JNIAccessFeature implements Feature {
             JNIJavaCallWrapperMethod varargsNonvirtualCallWrapper = null;
             JNIJavaCallWrapperMethod arrayNonvirtualCallWrapper = null;
             JNIJavaCallWrapperMethod valistNonvirtualCallWrapper = null;
-            if (!Modifier.isStatic(method.getModifiers())) {
+            if (!Modifier.isStatic(method.getModifiers()) && !Modifier.isAbstract(method.getModifiers())) {
                 varargsNonvirtualCallWrapper = new JNIJavaCallWrapperMethod(method, CallVariant.VARARGS, true, wrappedMetaAccess, nativeLibraries);
                 arrayNonvirtualCallWrapper = new JNIJavaCallWrapperMethod(method, CallVariant.ARRAY, true, wrappedMetaAccess, nativeLibraries);
                 valistNonvirtualCallWrapper = new JNIJavaCallWrapperMethod(method, CallVariant.VA_LIST, true, wrappedMetaAccess, nativeLibraries);
@@ -279,23 +256,26 @@ public class JNIAccessFeature implements Feature {
         });
     }
 
-    private static void addField(Field reflField, DuringAnalysisAccessImpl access) {
+    private static void addField(Field reflField, boolean writable, DuringAnalysisAccessImpl access) {
         BigBang bigBang = access.getBigBang();
         JNIAccessibleClass jniClass = addClass(reflField.getDeclaringClass(), access);
-        jniClass.addFieldIfAbsent(reflField.getName(), n -> {
-            AnalysisField field = access.getMetaAccess().lookupJavaField(reflField);
-            field.registerAsAccessed();
-            // Same as BigBang.addSystemField() and BigBang.addSystemStaticField():
-            // create type flows for any subtype of the field's declared type
-            TypeFlow<?> declaredTypeFlow = field.getType().getTypeFlow(bigBang, true);
-            if (field.isStatic()) {
-                declaredTypeFlow.addUse(bigBang, field.getStaticFieldFlow());
-            } else {
-                FieldTypeFlow instanceFieldFlow = field.getDeclaringClass().getContextInsensitiveAnalysisObject().getInstanceFieldFlow(bigBang, field, true);
-                declaredTypeFlow.addUse(bigBang, instanceFieldFlow);
-            }
-            return new JNIAccessibleField(jniClass, reflField.getName(), field.getModifiers());
-        });
+        AnalysisField field = access.getMetaAccess().lookupJavaField(reflField);
+        jniClass.addFieldIfAbsent(field.getName(), name -> new JNIAccessibleField(jniClass, name, field.getJavaKind(), field.getModifiers()));
+        field.registerAsRead(null);
+        if (writable) {
+            field.registerAsWritten(null);
+        } else if (field.isStatic() && field.isFinal()) {
+            MaterializedConstantFields.singleton().register(field);
+        }
+        // Same as BigBang.addSystemField() and BigBang.addSystemStaticField():
+        // create type flows for any subtype of the field's declared type
+        TypeFlow<?> declaredTypeFlow = field.getType().getTypeFlow(bigBang, true);
+        if (field.isStatic()) {
+            declaredTypeFlow.addUse(bigBang, field.getStaticFieldFlow());
+        } else {
+            FieldTypeFlow instanceFieldFlow = field.getDeclaringClass().getContextInsensitiveAnalysisObject().getInstanceFieldFlow(bigBang, field, writable);
+            declaredTypeFlow.addUse(bigBang, instanceFieldFlow);
+        }
     }
 
     @Override

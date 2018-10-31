@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -69,6 +71,8 @@ public final class NegateNode extends UnaryArithmeticNode<Neg> implements Narrow
 
     protected static ValueNode findSynonym(ValueNode forValue, NodeView view) {
         ArithmeticOpTable.UnaryOp<Neg> negOp = ArithmeticOpTable.forStamp(forValue.stamp(view)).getNeg();
+
+        // Folds constants
         ValueNode synonym = UnaryArithmeticNode.findSynonym(forValue, negOp);
         if (synonym != null) {
             return synonym;

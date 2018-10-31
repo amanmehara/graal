@@ -1,32 +1,49 @@
 /*
- * Copyright (c) 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api.debug.test;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
@@ -40,10 +57,12 @@ import org.junit.Test;
 import com.oracle.truffle.api.debug.Breakpoint;
 import com.oracle.truffle.api.debug.Debugger;
 import com.oracle.truffle.api.debug.DebuggerSession;
+import com.oracle.truffle.api.debug.SourceElement;
 import com.oracle.truffle.api.debug.SuspendAnchor;
 import com.oracle.truffle.api.debug.SuspendedEvent;
 import com.oracle.truffle.api.instrumentation.test.InstrumentationTestLanguage;
 import com.oracle.truffle.api.source.SourceSection;
+import com.oracle.truffle.tck.DebuggerTester;
 import org.graalvm.polyglot.Source;
 
 public class BreakpointTest extends AbstractDebugTest {
@@ -132,7 +151,7 @@ public class BreakpointTest extends AbstractDebugTest {
             expectSuspended((SuspendedEvent event) -> {
                 assertSame(breakpoint3a, event.getBreakpoints().iterator().next());
                 assertSame(SuspendAnchor.BEFORE, event.getSuspendAnchor());
-                assertEquals("null", event.getReturnValue().as(String.class));
+                assertNull(event.getReturnValue());
             });
             expectSuspended((SuspendedEvent event) -> {
                 assertSame(breakpoint3b, event.getBreakpoints().iterator().next());
@@ -234,6 +253,156 @@ public class BreakpointTest extends AbstractDebugTest {
             });
             expectDone();
             assertEquals(1, breakpoint.getHitCount());
+        }
+    }
+
+    @Test
+    public void testBreakpointConditionExecutedOnce() {
+        Source testSource = testSource("ROOT(\n" +
+                        "STATEMENT,\n" +
+                        "STATEMENT,\n" +
+                        "STATEMENT)");
+
+        try (DebuggerSession session = startSession()) {
+            Breakpoint breakpoint = session.install(Breakpoint.newBuilder(getSourceImpl(testSource)).lineIs(3).build());
+            breakpoint.setCondition("ROOT(PRINT(OUT, Hi), CONSTANT(true))");
+            // Breakpoint only:
+            startEval(testSource);
+            expectSuspended((SuspendedEvent event) -> {
+                assertSame(breakpoint, event.getBreakpoints().iterator().next());
+                assertNull(event.getBreakpointConditionException(breakpoint));
+            });
+            assertEquals(1, breakpoint.getHitCount());
+            expectDone();
+            assertEquals("Hi", getOutput());
+
+            // Breakpoint with step and an other breakpoint:
+            Breakpoint breakpoint2 = session.install(Breakpoint.newBuilder(getSourceImpl(testSource)).lineIs(3).build());
+            session.suspendNextExecution();
+            startEval(testSource);
+            expectSuspended((SuspendedEvent event) -> {
+                assertTrue(event.getBreakpoints().isEmpty());
+                event.prepareStepOver(1);
+            });
+            expectSuspended((SuspendedEvent event) -> {
+                assertEquals(2, event.getBreakpoints().size());
+                assertTrue(event.getBreakpoints().contains(breakpoint));
+                assertTrue(event.getBreakpoints().contains(breakpoint2));
+                assertNull(event.getBreakpointConditionException(breakpoint));
+                assertNull(event.getBreakpointConditionException(breakpoint2));
+                event.prepareStepOver(1);
+            });
+            expectSuspended((SuspendedEvent event) -> {
+                assertTrue(event.getBreakpoints().isEmpty());
+                event.prepareStepOver(1);
+            });
+            expectDone();
+            assertEquals("HiHi", getOutput());
+            assertEquals(2, breakpoint.getHitCount());
+            assertEquals(1, breakpoint2.getHitCount());
+        }
+    }
+
+    @Test
+    public void testBreakpointsAtSamePlaceHitCorrectly() {
+        Source testSource = testSource("ROOT(\n" +
+                        "  LOOP(4,\n" +
+                        "    STATEMENT\n" +
+                        "  )\n" +
+                        ")\n");
+        String conditionTrue = "ROOT(PRINT(OUT, CT), CONSTANT(true))";
+        String conditionFalse = "ROOT(PRINT(OUT, CF), CONSTANT(false))";
+        boolean isBefore = true;
+        String prefix = "";
+        do {
+            SuspendAnchor anchor = isBefore ? SuspendAnchor.BEFORE : SuspendAnchor.AFTER;
+            try (DebuggerSession session = startSession()) {
+                Breakpoint breakpoint1 = session.install(Breakpoint.newBuilder(getSourceImpl(testSource)).lineIs(3).suspendAnchor(anchor).build());
+                Breakpoint breakpoint2 = session.install(Breakpoint.newBuilder(getSourceImpl(testSource)).lineIs(3).suspendAnchor(anchor).build());
+                breakpoint1.setCondition(conditionFalse);
+                breakpoint2.setCondition(conditionTrue);
+                startEval(testSource);
+
+                final String out1 = prefix + ((isBefore) ? "CFCT" : "CTCF");
+                expectSuspended((SuspendedEvent event) -> {
+                    assertEquals(1, event.getBreakpoints().size());
+                    Breakpoint hit = event.getBreakpoints().get(0);
+                    assertSame(breakpoint2, hit);
+                    assertEquals(out1, getOutput());
+                });
+                final String out2 = out1 + ((isBefore) ? "CFCT" : "CTCF");
+                expectSuspended((SuspendedEvent event) -> {
+                    assertEquals(1, event.getBreakpoints().size());
+                    Breakpoint hit = event.getBreakpoints().get(0);
+                    assertSame(breakpoint2, hit);
+                    breakpoint1.setCondition(conditionTrue);
+                    breakpoint2.setCondition(conditionFalse);
+                    assertEquals(out2, getOutput());
+                });
+                final String out3 = out2 + ((isBefore) ? "CTCF" : "CFCT");
+                expectSuspended((SuspendedEvent event) -> {
+                    assertEquals(1, event.getBreakpoints().size());
+                    Breakpoint hit = event.getBreakpoints().get(0);
+                    assertSame(breakpoint1, hit);
+                    breakpoint1.setCondition(null);
+                    breakpoint2.setCondition(null);
+                    assertEquals(out3, getOutput());
+                });
+                expectSuspended((SuspendedEvent event) -> {
+                    assertEquals(2, event.getBreakpoints().size());
+                });
+                expectDone();
+                prefix += out3;
+                assertEquals(out3, getOutput());
+                assertEquals(2, breakpoint1.getHitCount());
+                assertEquals(3, breakpoint2.getHitCount());
+            }
+        } while (!(isBefore = !isBefore));
+    }
+
+    @Test
+    public void testMultiSessionBreakpointConditionExecutedOnce() {
+        Source testSource = testSource("ROOT(\n" +
+                        "STATEMENT,\n" +
+                        "STATEMENT,\n" +
+                        "STATEMENT)");
+
+        try (DebuggerSession session1 = startSession()) {
+            Breakpoint breakpoint1 = session1.install(Breakpoint.newBuilder(getSourceImpl(testSource)).lineIs(3).build());
+            breakpoint1.setCondition("ROOT(PRINT(OUT, Hi1), CONSTANT(true))");
+            try (DebuggerSession session2 = startSession()) {
+                session2.install(breakpoint1);
+                try (DebuggerSession session3 = startSession()) {
+                    Breakpoint breakpoint3 = session3.install(Breakpoint.newBuilder(getSourceImpl(testSource)).lineIs(3).build());
+                    breakpoint3.setCondition("ROOT(PRINT(OUT, Hi3), CONSTANT(true))");
+                    session3.suspendNextExecution();
+                    startEval(testSource);
+                    expectSuspended((SuspendedEvent event) -> {
+                        assertSame(session3, event.getSession());
+                        assertTrue(event.getBreakpoints().isEmpty());
+                        event.prepareStepOver(1);
+                    });
+                    expectSuspended((SuspendedEvent event) -> {
+                        assertSame(session3, event.getSession());
+                        assertEquals(1, event.getBreakpoints().size());
+                        assertSame(breakpoint3, event.getBreakpoints().get(0));
+                    });
+                    expectSuspended((SuspendedEvent event) -> {
+                        assertSame(session1, event.getSession());
+                        assertEquals(1, event.getBreakpoints().size());
+                        assertSame(breakpoint1, event.getBreakpoints().get(0));
+                    });
+                    expectSuspended((SuspendedEvent event) -> {
+                        assertSame(session2, event.getSession());
+                        assertEquals(1, event.getBreakpoints().size());
+                        assertSame(breakpoint1, event.getBreakpoints().get(0));
+                    });
+                    expectDone();
+                    assertEquals("Hi3Hi1", getOutput());
+                    assertEquals(1, breakpoint1.getHitCount());
+                    assertEquals(1, breakpoint3.getHitCount());
+                }
+            }
         }
     }
 
@@ -512,7 +681,7 @@ public class BreakpointTest extends AbstractDebugTest {
 
         // Breakpoints deactivated after the first suspend - no breakpoints are hit
         try (DebuggerSession session = startSession()) {
-            Assert.assertTrue(session.isBreakpointsActive());
+            Assert.assertTrue(session.isBreakpointsActive(Breakpoint.Kind.SOURCE_LOCATION));
             // normal breakpoint
             Breakpoint breakpoint3 = session.install(Breakpoint.newBuilder(getSourceImpl(source)).lineIs(3).build());
 
@@ -530,7 +699,7 @@ public class BreakpointTest extends AbstractDebugTest {
 
             expectSuspended((SuspendedEvent event) -> {
                 checkState(event, 2, true, "STATEMENT");
-                session.setBreakpointsActive(false);
+                session.setBreakpointsActive(Breakpoint.Kind.SOURCE_LOCATION, false);
             });
             expectDone();
 
@@ -544,7 +713,7 @@ public class BreakpointTest extends AbstractDebugTest {
 
         // Breakpoints deactivated after the first one is hit - the others are not
         try (DebuggerSession session = startSession()) {
-            Assert.assertTrue(session.isBreakpointsActive());
+            Assert.assertTrue(session.isBreakpointsActive(Breakpoint.Kind.SOURCE_LOCATION));
             // normal breakpoint
             Breakpoint breakpoint2 = session.install(Breakpoint.newBuilder(getSourceImpl(source)).lineIs(2).build());
 
@@ -562,7 +731,7 @@ public class BreakpointTest extends AbstractDebugTest {
 
             expectSuspended((SuspendedEvent event) -> {
                 checkState(event, 2, true, "STATEMENT");
-                session.setBreakpointsActive(false);
+                session.setBreakpointsActive(Breakpoint.Kind.SOURCE_LOCATION, false);
             });
             expectDone();
 
@@ -576,9 +745,9 @@ public class BreakpointTest extends AbstractDebugTest {
 
         // Breakpoints initially deactivated, they are activated before the last one is hit.
         try (DebuggerSession session = startSession()) {
-            Assert.assertTrue(session.isBreakpointsActive());
-            session.setBreakpointsActive(false);
-            Assert.assertFalse(session.isBreakpointsActive());
+            Assert.assertTrue(session.isBreakpointsActive(Breakpoint.Kind.SOURCE_LOCATION));
+            session.setBreakpointsActive(Breakpoint.Kind.SOURCE_LOCATION, false);
+            Assert.assertFalse(session.isBreakpointsActive(Breakpoint.Kind.SOURCE_LOCATION));
             // normal breakpoint
             Breakpoint breakpoint2 = session.install(Breakpoint.newBuilder(getSourceImpl(source)).lineIs(2).build());
 
@@ -599,7 +768,7 @@ public class BreakpointTest extends AbstractDebugTest {
             });
             expectSuspended((SuspendedEvent event) -> {
                 checkState(event, 4, true, "STATEMENT");
-                session.setBreakpointsActive(true);
+                session.setBreakpointsActive(Breakpoint.Kind.SOURCE_LOCATION, true);
             });
             expectSuspended((SuspendedEvent event) -> {
                 checkState(event, 5, true, "STATEMENT");
@@ -619,13 +788,6 @@ public class BreakpointTest extends AbstractDebugTest {
     @SuppressWarnings("try") // auto-closeable resource session is never referenced in body of
                              // corresponding try statement
     public void testGlobalBreakpoints() throws Throwable {
-        try {
-            Class.forName("java.beans.PropertyChangeListener");
-        } catch (ClassNotFoundException ex) {
-            // skip the test if running only with java.base JDK9 module
-            return;
-        }
-
         final Source source = testSource("ROOT(\n" +
                         "  STATEMENT,\n" +
                         "  STATEMENT\n" +
@@ -722,13 +884,6 @@ public class BreakpointTest extends AbstractDebugTest {
 
     @Test
     public void testGlobalBreakpointsInMultipleSessions() throws Throwable {
-        try {
-            Class.forName("java.beans.PropertyChangeListener");
-        } catch (ClassNotFoundException ex) {
-            // skip the test if running only with java.base JDK9 module
-            return;
-        }
-
         final Source source = testSource("ROOT(\n" +
                         "  STATEMENT,\n" +
                         "  STATEMENT,\n" +
@@ -769,26 +924,32 @@ public class BreakpointTest extends AbstractDebugTest {
 
             // Both sessions should break here:
             expectSuspended((SuspendedEvent event) -> {
+                assertSame(session1, event.getSession());
                 checkState(event, 2, true, "STATEMENT").prepareContinue();
             });
             expectSuspended((SuspendedEvent event) -> {
+                assertSame(session2, event.getSession());
                 checkState(event, 2, true, "STATEMENT").prepareContinue();
             });
             // We close session2 after the next BP:
             expectSuspended((SuspendedEvent event) -> {
+                assertSame(session1, event.getSession());
                 checkState(event, 4, true, "STATEMENT");
             });
         }
 
         expectSuspended((SuspendedEvent event) -> {
+            assertNotSame(session1, event.getSession());
             checkState(event, 4, true, "STATEMENT").prepareContinue();
         });
 
         // The last breakpoint is hit once only in the session1:
         expectSuspended((SuspendedEvent event) -> {
+            assertSame(session1, event.getSession());
             checkState(event, 6, true, "STATEMENT").prepareStepOver(1);
         });
         expectSuspended((SuspendedEvent event) -> {
+            assertSame(session1, event.getSession());
             checkState(event, 7, true, "STATEMENT");
             session1.close();
             event.prepareContinue();
@@ -799,4 +960,184 @@ public class BreakpointTest extends AbstractDebugTest {
 
     }
 
+    @Test
+    public void testResolveListener() {
+        final Source source = testSource("ROOT(\n" +
+                        "  STATEMENT,\n" +
+                        "  STATEMENT,\n" +
+                        "  STATEMENT,\n" + // break here
+                        "  STATEMENT,\n" +
+                        "  STATEMENT\n" +
+                        ")\n");
+        Breakpoint sessionBreakpoint = null;
+        try (DebuggerSession session = startSession()) {
+            Breakpoint[] resolvedBp = new Breakpoint[1];
+            SourceSection[] resolvedSection = new SourceSection[1];
+            Breakpoint.ResolveListener bpResolveListener = (Breakpoint breakpoint, SourceSection section) -> {
+                resolvedBp[0] = breakpoint;
+                resolvedSection[0] = section;
+            };
+            Breakpoint breakpoint = session.install(Breakpoint.newBuilder(getSourceImpl(source)).lineIs(4).resolveListener(bpResolveListener).build());
+            Assert.assertNull(resolvedBp[0]);
+            Assert.assertNull(resolvedSection[0]);
+            sessionBreakpoint = breakpoint;
+            startEval(source);
+            expectSuspended((SuspendedEvent event) -> {
+                Assert.assertSame(breakpoint, resolvedBp[0]);
+                Assert.assertEquals(event.getSourceSection(), resolvedSection[0]);
+                checkState(event, 4, true, "STATEMENT");
+                Assert.assertEquals(1, event.getBreakpoints().size());
+                Assert.assertSame(breakpoint, event.getBreakpoints().get(0));
+            });
+            Assert.assertEquals(1, breakpoint.getHitCount());
+            Assert.assertEquals(true, breakpoint.isEnabled());
+            Assert.assertEquals(true, breakpoint.isResolved());
+            expectDone();
+        }
+        Assert.assertEquals(false, sessionBreakpoint.isResolved());
+
+    }
+
+    @Test
+    public void testBreakAtExpressions() {
+        final Source source = testSource("ROOT(\n" +
+                        "  STATEMENT,\n" +
+                        "  EXPRESSION,\n" +
+                        "  STATEMENT\n" +
+                        ")\n");
+        try (DebuggerSession session = startSession()) {
+            Breakpoint breakpoint = Breakpoint.newBuilder(getSourceImpl(source)).lineIs(3).sourceElements(SourceElement.EXPRESSION).build();
+            session.install(breakpoint);
+            startEval(source);
+            expectSuspended((SuspendedEvent event) -> {
+                Assert.assertSame(breakpoint, event.getBreakpoints().get(0));
+                checkState(event, 3, true, "EXPRESSION");
+            });
+            expectDone();
+        }
+        try (DebuggerSession session = startSession()) {
+            Breakpoint breakpoint = Breakpoint.newBuilder(getSourceImpl(source)).lineIs(2).sourceElements(SourceElement.EXPRESSION).build();
+            // Will be moved from line 2 to the expression at line 3.
+            session.install(breakpoint);
+            startEval(source);
+            expectSuspended((SuspendedEvent event) -> {
+                Assert.assertSame(breakpoint, event.getBreakpoints().get(0));
+                checkState(event, 3, true, "EXPRESSION");
+            });
+            expectDone();
+        }
+    }
+
+    @Test
+    public void testBreakAtMultipleSourceElements() {
+        final Source source = testSource("ROOT(\n" +
+                        "  STATEMENT,EXPRESSION,\n" +
+                        "  EXPRESSION,STATEMENT,\n" +
+                        "  STATEMENT,EXPRESSION\n" +
+                        ")\n");
+        try (DebuggerSession session = startSession()) {
+            Breakpoint breakpoint = Breakpoint.newBuilder(getSourceImpl(source)).lineIs(3).sourceElements(SourceElement.STATEMENT, SourceElement.EXPRESSION).build();
+            session.install(breakpoint);
+            startEval(source);
+            expectSuspended((SuspendedEvent event) -> {
+                Assert.assertSame(breakpoint, event.getBreakpoints().get(0));
+                checkState(event, 3, true, "EXPRESSION");
+            });
+            expectSuspended((SuspendedEvent event) -> {
+                Assert.assertSame(breakpoint, event.getBreakpoints().get(0));
+                checkState(event, 3, true, "STATEMENT");
+            });
+            expectDone();
+        }
+    }
+
+    @Test
+    public void testMisplacedLineBreakpoints() throws Exception {
+        final String source = "ROOT(\n" +
+                        "  DEFINE(foo,\n" +
+                        "    R3_STATEMENT,\n" +
+                        "    EXPRESSION,\n" +
+                        "    DEFINE(fooinner,\n" +
+                        "      VARIABLE(n, 10),\n" +
+                        "      \n" +
+                        "      R6-9_STATEMENT\n" +
+                        "    ),\n" +
+                        "    R4-5_R10-12_STATEMENT(EXPRESSION),\n" +
+                        "    CALL(fooinner)\n" +
+                        "  ),\n" +
+                        "  \n" +
+                        "  R1-2_R13-16_STATEMENT,\n" +
+                        "  CALL(foo)\n" +
+                        ")\n";
+        tester.assertLineBreakpointsResolution(source, "R", InstrumentationTestLanguage.ID);
+    }
+
+    @Test
+    public void testMisplacedBreakpointPositions() throws Exception {
+        String source = " B1_{} R1-2_{S B2_}B3_\n" +
+                        "R3_[SFB ]\n" +
+                        "{F{B\n" +
+                        "  B4_{I B5_ } R4-5_[SFIB B6_ R6-7_{S}B7_] B8_\n" +
+                        "  {}\n" +
+                        "  R8-11_{S}\n" +
+                        "B9_}B10_}B11_\n";
+        assertColumnPositionsTest(source);
+    }
+
+    private void assertColumnPositionsTest(String source) throws Exception {
+        tester.assertColumnBreakpointsResolution(source, "B", "R", InstrumentablePositionsTestLanguage.ID);
+        tester.close();
+        // Different materialization changes the order of nodes that are processed during search for
+        // the nearest suspendable location of a breakpoint.
+        tester = new DebuggerTester(org.graalvm.polyglot.Context.newBuilder().option(InstrumentablePositionsTestLanguage.ID + ".PreMaterialize", "1"));
+        tester.assertColumnBreakpointsResolution(source, "B", "R", InstrumentablePositionsTestLanguage.ID);
+        tester.close();
+        tester = new DebuggerTester(org.graalvm.polyglot.Context.newBuilder().option(InstrumentablePositionsTestLanguage.ID + ".PreMaterialize", "2"));
+        tester.assertColumnBreakpointsResolution(source, "B", "R", InstrumentablePositionsTestLanguage.ID);
+    }
+
+    @Test
+    public void testStepOverBreakpoint() {
+        final Source source = testSource("ROOT(\n" +
+                        "  STATEMENT,\n" +
+                        "  STATEMENT,\n" +
+                        "  STATEMENT,\n" +
+                        "  STATEMENT\n" +
+                        ")\n");
+        try (DebuggerSession session = startSession()) {
+            session.suspendNextExecution();
+            Breakpoint breakpoint3 = Breakpoint.newBuilder(getSourceImpl(source)).lineIs(3).build();
+            Breakpoint breakpoint4 = Breakpoint.newBuilder(getSourceImpl(source)).lineIs(4).build();
+            Breakpoint breakpoint5 = Breakpoint.newBuilder(getSourceImpl(source)).lineIs(5).build();
+            session.install(breakpoint3);
+            session.install(breakpoint4);
+            session.install(breakpoint5);
+            breakpoint4.setEnabled(false);
+
+            startEval(source);
+            expectSuspended((SuspendedEvent event) -> {
+                // No breakpoints set at line 2
+                assertEquals(0, event.getBreakpoints().size());
+                checkState(event, 2, true, "STATEMENT").prepareStepOver(1);
+            });
+            expectSuspended((SuspendedEvent event) -> {
+                // Enabled breakpoint at line 3
+                assertEquals(1, event.getBreakpoints().size());
+                assertSame(breakpoint3, event.getBreakpoints().get(0));
+                checkState(event, 3, true, "STATEMENT").prepareStepOver(1);
+            });
+            expectSuspended((SuspendedEvent event) -> {
+                // Disabled breakpoint at line 4
+                assertEquals(0, event.getBreakpoints().size());
+                checkState(event, 4, true, "STATEMENT").prepareStepOver(1);
+                session.setBreakpointsActive(Breakpoint.Kind.SOURCE_LOCATION, false);
+            });
+            expectSuspended((SuspendedEvent event) -> {
+                // Deactivated breakpoints
+                assertEquals(0, event.getBreakpoints().size());
+                checkState(event, 5, true, "STATEMENT").prepareStepOver(1);
+            });
+            expectDone();
+        }
+    }
 }

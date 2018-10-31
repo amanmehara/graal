@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -26,10 +28,10 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
-import org.junit.Test;
-import org.graalvm.polyglot.Context;
 import org.graalvm.compiler.truffle.runtime.GraalTruffleRuntime;
 import org.graalvm.compiler.truffle.runtime.OptimizedCallTarget;
+import org.graalvm.polyglot.Context;
+import org.junit.Test;
 
 import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.TruffleLanguage;
@@ -59,7 +61,7 @@ public class AllocationReporterPartialEvaluationTest extends TestWithSynchronous
         context.initialize(AllocationReporterLanguage.ID);
         final TestAllocationReporter tester = context.getEngine().getInstruments().get(TestAllocationReporter.ID).lookup(TestAllocationReporter.class);
         assertNotNull(tester);
-        final AllocationReporter reporter = (AllocationReporter) context.importSymbol(AllocationReporter.class.getSimpleName()).asHostObject();
+        final AllocationReporter reporter = (AllocationReporter) context.getPolyglotBindings().getMember(AllocationReporter.class.getSimpleName()).asHostObject();
         final Long[] value = new Long[]{1L};
         OptimizedCallTarget enterTarget = (OptimizedCallTarget) runtime.createCallTarget(new RootNode(null) {
             @Override
@@ -82,8 +84,8 @@ public class AllocationReporterPartialEvaluationTest extends TestWithSynchronous
         assertNotCompiled(returnTarget);
         returnTarget.call();
         value[0]++;
-        enterTarget.compile();
-        returnTarget.compile();
+        enterTarget.compile(true);
+        returnTarget.compile(true);
         assertCompiled(enterTarget);
         assertCompiled(returnTarget);
         long expectedCounters = allocCounter(value[0]);
@@ -104,39 +106,39 @@ public class AllocationReporterPartialEvaluationTest extends TestWithSynchronous
             assertEquals(expectedCounters, tester.getReturnCount());
 
             // Deoptimize enter:
-            enterTarget.invalidate();
+            enterTarget.invalidate(this, "test");
             assertNotCompiled(enterTarget);
             enterTarget.call();
             assertCompiled(returnTarget);
             returnTarget.call();
             value[0]++;
-            enterTarget.compile();
-            returnTarget.compile();
+            enterTarget.compile(true);
+            returnTarget.compile(true);
             assertCompiled(enterTarget);
             assertCompiled(returnTarget);
 
             // Deoptimize return:
-            returnTarget.invalidate();
+            returnTarget.invalidate(this, "test");
             assertCompiled(enterTarget);
             enterTarget.call();
             assertNotCompiled(returnTarget);
             returnTarget.call();
             value[0]++;
-            enterTarget.compile();
-            returnTarget.compile();
+            enterTarget.compile(true);
+            returnTarget.compile(true);
             assertCompiled(enterTarget);
             assertCompiled(returnTarget);
 
             // Deoptimize both:
-            enterTarget.invalidate();
-            returnTarget.invalidate();
+            enterTarget.invalidate(this, "test");
+            returnTarget.invalidate(this, "test");
             assertNotCompiled(enterTarget);
             enterTarget.call();
             assertNotCompiled(returnTarget);
             returnTarget.call();
             value[0]++;
-            enterTarget.compile();
-            returnTarget.compile();
+            enterTarget.compile(true);
+            returnTarget.compile(true);
             assertCompiled(enterTarget);
             assertCompiled(returnTarget);
         }
@@ -151,7 +153,7 @@ public class AllocationReporterPartialEvaluationTest extends TestWithSynchronous
         value[0] = null;
         boolean expectedFailure = true;
         // Deoptimize for assertions to be active
-        enterTarget.invalidate();
+        enterTarget.invalidate(this, "test");
         try {
             enterTarget.call();
             expectedFailure = false;
@@ -161,7 +163,7 @@ public class AllocationReporterPartialEvaluationTest extends TestWithSynchronous
         assertTrue("onEnter(null) did not fail!", expectedFailure);
 
         // Deoptimize for assertions to be active
-        returnTarget.invalidate();
+        returnTarget.invalidate(this, "test");
 
         value[0] = Long.MIN_VALUE;
         try {
@@ -178,28 +180,16 @@ public class AllocationReporterPartialEvaluationTest extends TestWithSynchronous
         return n * (n - 1) / 2;
     }
 
-    @TruffleLanguage.Registration(mimeType = AllocationReporterLanguage.MIME_TYPE, name = "Allocation Reporter PE Test Language", id = AllocationReporterLanguage.ID, version = "1.0")
+    @TruffleLanguage.Registration(id = AllocationReporterLanguage.ID, name = "Allocation Reporter PE Test Language")
     public static class AllocationReporterLanguage extends TruffleLanguage<AllocationReporter> {
 
         static final String ID = "truffle-allocation-reporter-pe-test-language";
-        static final String MIME_TYPE = "application/x-truffle-allocation-reporter-pe-test-language";
 
         @Override
         protected AllocationReporter createContext(TruffleLanguage.Env env) {
-            return env.lookup(AllocationReporter.class);
-        }
-
-        @Override
-        protected Object findExportedSymbol(AllocationReporter context, String globalName, boolean onlyExplicit) {
-            if (AllocationReporter.class.getSimpleName().equals(globalName)) {
-                return context;
-            }
-            return null;
-        }
-
-        @Override
-        protected Object getLanguageGlobal(AllocationReporter context) {
-            return null;
+            AllocationReporter reporter = env.lookup(AllocationReporter.class);
+            env.exportSymbol(AllocationReporter.class.getSimpleName(), env.asGuestValue(reporter));
+            return reporter;
         }
 
         @Override

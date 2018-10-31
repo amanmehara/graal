@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,8 +24,10 @@
  */
 package org.graalvm.compiler.truffle.common.hotspot;
 
+import org.graalvm.compiler.truffle.common.CompilableTruffleAST;
 import org.graalvm.compiler.truffle.common.TruffleCompilerRuntime;
 
+import jdk.vm.ci.code.InstalledCode;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 public interface HotSpotTruffleCompilerRuntime extends TruffleCompilerRuntime {
@@ -32,4 +36,12 @@ public interface HotSpotTruffleCompilerRuntime extends TruffleCompilerRuntime {
      * {@code TruffleCallBoundary}).
      */
     Iterable<ResolvedJavaMethod> getTruffleCallBoundaryMethods();
+
+    /**
+     * Notifies this runtime once {@code installedCode} has been installed in the code cache.
+     *
+     * @param compilable the {@link CompilableTruffleAST compilable} to install code into
+     * @param installedCode code that has just been installed in the code cache
+     */
+    void onCodeInstallation(CompilableTruffleAST compilable, InstalledCode installedCode);
 }

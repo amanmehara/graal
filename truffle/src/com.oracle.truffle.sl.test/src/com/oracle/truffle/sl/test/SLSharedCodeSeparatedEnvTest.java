@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -77,9 +77,9 @@ public class SLSharedCodeSeparatedEnvTest {
         int instances = SLLanguage.counter;
         // @formatter:off
         e1 = Context.newBuilder("sl").engine(engine).out(os1).build();
-        e1.exportSymbol("extra", 1);
+        e1.getPolyglotBindings().putMember("extra", 1);
         e2 = Context.newBuilder("sl").engine(engine).out(os2).build();
-        e2.exportSymbol("extra", 2);
+        e2.getPolyglotBindings().putMember("extra", 2);
         e1.initialize("sl");
         e2.initialize("sl");
         assertEquals("One SLLanguage instance created", instances + 1, SLLanguage.counter);

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -45,41 +47,52 @@ import org.graalvm.compiler.truffle.runtime.OptimizedCallTarget;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
+import com.oracle.svm.core.graal.GraalConfiguration;
 import com.oracle.svm.core.graal.code.SubstrateCompilationResult;
 import com.oracle.svm.graal.GraalSupport;
 import com.oracle.svm.truffle.SubstrateTruffleCompilationIdentifier;
 import com.oracle.svm.truffle.TruffleFeature;
 
+import jdk.vm.ci.code.InstalledCode;
+
 public class SubstrateTruffleCompiler extends TruffleCompilerImpl {
+
+    private final String compilerConfigurationName;
 
     @Platforms(Platform.HOSTED_ONLY.class)
     public SubstrateTruffleCompiler(TruffleCompilerRuntime runtime, Plugins plugins, Suites suites, LIRSuites lirSuites, Backend backend, SnippetReflectionProvider snippetReflection) {
-        super(runtime, plugins, suites, lirSuites, backend, snippetReflection);
+        super(runtime, plugins, suites, lirSuites, backend, null, null, null, snippetReflection);
+        compilerConfigurationName = GraalConfiguration.instance().getCompilerConfigurationName();
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
     @Override
     protected PartialEvaluator createPartialEvaluator() {
-        return TruffleFeature.getSupport().createPartialEvaluator(providers, config, snippetReflection, backend.getTarget().arch, getInstrumentation());
+        return TruffleFeature.getSupport().createPartialEvaluator(lastTierProviders, config, snippetReflection, backend.getTarget().arch);
     }
 
     @Override
-    protected PhaseSuite<HighTierContext> createGraphBuilderSuite() {
+    public PhaseSuite<HighTierContext> createGraphBuilderSuite() {
         return null;
     }
 
     @Override
-    protected CompilationResult createCompilationResult(String name, CompilationIdentifier compilationIdentifier) {
+    public String getCompilerConfigurationName() {
+        return compilerConfigurationName;
+    }
+
+    @Override
+    protected CompilationResult createCompilationResult(String name, CompilationIdentifier compilationIdentifier, CompilableTruffleAST compilable) {
         return new SubstrateCompilationResult(compilationIdentifier, name);
     }
 
     @Override
-    public CompilationIdentifier getCompilationIdentifier(CompilableTruffleAST optimizedCallTarget) {
+    public CompilationIdentifier createCompilationIdentifier(CompilableTruffleAST optimizedCallTarget) {
         return new SubstrateTruffleCompilationIdentifier((OptimizedCallTarget) optimizedCallTarget);
     }
 
     @Override
-    public DebugContext openDebugContext(OptionValues options, CompilationIdentifier compilationId, CompilableTruffleAST callTarget) {
+    public DebugContext createDebugContext(OptionValues options, CompilationIdentifier compilationId, CompilableTruffleAST callTarget) {
         return GraalSupport.get().openDebugContext(options, compilationId, callTarget);
     }
 
@@ -91,5 +104,10 @@ public class SubstrateTruffleCompiler extends TruffleCompilerImpl {
     @Override
     protected Map<ExceptionAction, Integer> getCompilationProblemsPerAction() {
         return GraalSupport.get().getCompilationProblemsPerAction();
+    }
+
+    @Override
+    protected InstalledCode createInstalledCode(CompilableTruffleAST compilable) {
+        return new SubstrateTruffleInstalledCodeBridge((SubstrateOptimizedCallTarget) compilable);
     }
 }

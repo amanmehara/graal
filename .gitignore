@@ -1,3 +1,4 @@
+*~
 *.aux
 *.bak
 *.bgv
@@ -10,6 +11,7 @@
 *.jar
 *.log
 *.o
+*.obj
 *.orig
 *.pdf
 *.pyc
@@ -45,6 +47,5 @@ scratch/
 src_gen/
 test-output/
 workingsets.xml
-native-image
 bench-results.json
 jmh_result.json

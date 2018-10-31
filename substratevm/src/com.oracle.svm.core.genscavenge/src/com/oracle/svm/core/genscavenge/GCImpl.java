@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -35,6 +37,7 @@ import javax.management.ObjectName;
 import org.graalvm.compiler.api.replacements.Fold;
 import org.graalvm.compiler.options.Option;
 import org.graalvm.compiler.word.Word;
+import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.Feature.FeatureAccess;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.Platform;
@@ -46,7 +49,7 @@ import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.annotate.AlwaysInline;
-import com.oracle.svm.core.annotate.MustNotAllocate;
+import com.oracle.svm.core.annotate.RestrictHeapAccess;
 import com.oracle.svm.core.heap.AllocationFreeList;
 import com.oracle.svm.core.heap.AllocationFreeList.PreviouslyRegisteredElementException;
 import com.oracle.svm.core.heap.CollectionWatcher;
@@ -58,9 +61,11 @@ import com.oracle.svm.core.heap.NoAllocationVerifier;
 import com.oracle.svm.core.heap.ObjectReferenceWalker;
 import com.oracle.svm.core.heap.ObjectVisitor;
 import com.oracle.svm.core.hub.LayoutEncoding;
+import com.oracle.svm.core.jdk.RuntimeSupport;
+import com.oracle.svm.core.jdk.SunMiscSupport;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.option.HostedOptionKey;
-import com.oracle.svm.core.snippets.KnownIntrinsics;
+import com.oracle.svm.core.os.CommittedMemoryProvider;
 import com.oracle.svm.core.stack.JavaStackWalker;
 import com.oracle.svm.core.stack.ThreadStackPrinter;
 import com.oracle.svm.core.thread.VMOperation;
@@ -146,7 +151,7 @@ public class GCImpl implements GC {
         this.noAllocationVerifier = NoAllocationVerifier.factory("GCImpl.GCImpl()", false);
         this.discoveredReferenceList = null;
         this.completeCollection = false;
-        this.sizeBefore = Word.zero();
+        this.sizeBefore = WordFactory.zero();
 
         /* Choose an incremental versus full collection policy. */
         this.policy = CollectionPolicy.getInitialPolicy(access);
@@ -155,7 +160,7 @@ public class GCImpl implements GC {
         this.greyToBlackObjectVisitor = GreyToBlackObjectVisitor.factory(greyToBlackObjRefVisitor);
         this.alwaysCompletelyInstance = new CollectionPolicy.OnlyCompletely();
         this.collectionInProgress = Latch.factory("Collection in progress");
-        this.oldGenerationSizeExceeded = new OutOfMemoryError("Old generation size exceeded.");
+        this.oldGenerationSizeExceeded = new OutOfMemoryError("Garbage-collected heap size exceeded.");
         this.unpinnedObjectReferenceWalkerException = new UnpinnedObjectReferenceWalkerException();
         this.gcManagementFactory = new GarbageCollectorManagementFactory();
 
@@ -176,6 +181,8 @@ public class GCImpl implements GC {
         this.watchersAfterTimer = new Timer("watchersAfter");
         this.mutatorTimer = new Timer("Mutator");
         this.walkRegisteredMemoryTimer = new Timer("walkRegisteredMemory");
+
+        RuntimeSupport.getRuntimeSupport().addShutdownHook(this::printGCSummary);
     }
 
     /*
@@ -191,7 +198,7 @@ public class GCImpl implements GC {
         possibleCollectionEpilogue(requestingEpoch);
     }
 
-    @MustNotAllocate(reason = "Must not allocate in the implementation of garbage collection.")
+    @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Must not allocate in the implementation of garbage collection.")
     void collectWithoutAllocating(String cause) {
         /* Queue a VMOperation to do the collection. */
         collectVMOperation.enqueue(cause, getCollectionEpoch());
@@ -282,6 +289,8 @@ public class GCImpl implements GC {
                 HeapImpl.getHeapImpl().verifyBeforeGC(cause, getCollectionEpoch());
             }
 
+            CommittedMemoryProvider.get().beforeGarbageCollection();
+
             getAccounting().beforeCollection();
 
             try (Timer ct = collectionTimer.open()) {
@@ -301,8 +310,7 @@ public class GCImpl implements GC {
                 }
             }
 
-            /* Distribute any discovered references to their queues. */
-            DiscoverableReferenceProcessing.Scatterer.distributeReferences();
+            CommittedMemoryProvider.get().afterGarbageCollection(completeCollection);
         }
 
         getAccounting().afterCollection(completeCollection, collectionTimer);
@@ -313,6 +321,9 @@ public class GCImpl implements GC {
         }
 
         postcondition();
+
+        /* Distribute any discovered references to their queues. */
+        DiscoverableReferenceProcessing.Scatterer.distributeReferences();
 
         trace.string("]").newline();
     }
@@ -334,7 +345,7 @@ public class GCImpl implements GC {
             verboseGCLog.string("     AlignedChunkSize: ").unsigned(HeapPolicy.getAlignedHeapChunkSize()).newline();
             verboseGCLog.string("  LargeArrayThreshold: ").unsigned(HeapPolicy.getLargeArrayThreshold()).string("]").newline();
             if (HeapOptions.PrintHeapShape.getValue()) {
-                HeapImpl.getHeapImpl().bootImageHeapBoundariesToLog(verboseGCLog);
+                HeapImpl.getHeapImpl().bootImageHeapBoundariesToLog(verboseGCLog).newline();
             }
         }
 
@@ -723,7 +734,7 @@ public class GCImpl implements GC {
                  * (or in native code) so they will each have a JavaFrameAnchor in their VMThread.
                  */
                 for (IsolateThread vmThread = VMThreads.firstThread(); VMThreads.isNonNullThread(vmThread); vmThread = VMThreads.nextThread(vmThread)) {
-                    if (vmThread == KnownIntrinsics.currentVMThread()) {
+                    if (vmThread == CurrentIsolate.getCurrentThread()) {
                         /*
                          * The current thread is already scanned by code above, so we do not have to
                          * do anything for it here. It might have a JavaFrameAnchor from earlier
@@ -887,6 +898,7 @@ public class GCImpl implements GC {
      */
     void possibleCollectionEpilogue(UnsignedWord requestingEpoch) {
         if (requestingEpoch.belowThan(getCollectionEpoch())) {
+            SunMiscSupport.drainCleanerQueue();
             visitWatchersReport();
         }
     }
@@ -1293,7 +1305,7 @@ public class GCImpl implements GC {
         }
 
         UnsignedWord[] historyFactory(UnsignedWord initial) {
-            assert initial.equal(WordFactory.zero()) : "Can not initialize history to any value except Word.zero().";
+            assert initial.equal(WordFactory.zero()) : "Can not initialize history to any value except WordFactory.zero().";
             final UnsignedWord[] result = new UnsignedWord[Options.GCHistory.getValue().intValue()];
             /* Initialization to null/WordFactory.zero() is implicit. */
             return result;
@@ -1608,7 +1620,7 @@ public class GCImpl implements GC {
 
         /** What happens when this VMOperation executes. */
         @Override
-        @MustNotAllocate(reason = "Must not allocate while collecting")
+        @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Must not allocate while collecting")
         public void operate() {
             result = HeapImpl.getHeapImpl().getGCImpl().collectOperation(cause, requestingEpoch);
         }
@@ -1618,8 +1630,12 @@ public class GCImpl implements GC {
         }
     }
 
-    @Override
-    public void printGCSummary() {
+    /* Invoked by a shutdown hook registered in the GCImpl constructor. */
+    private void printGCSummary() {
+        if (!SubstrateOptions.PrintGCSummary.getValue()) {
+            return;
+        }
+
         final Log log = Log.log();
         final String prefix = "PrintGCSummary: ";
 
@@ -1696,6 +1712,7 @@ final class GarbageCollectorManagementFactory {
 
     GarbageCollectorManagementFactory() {
         final List<GarbageCollectorMXBean> newList = new ArrayList<>();
+        /* Changing the order of this list will break assumptions we take in the object replacer. */
         newList.add(new IncrementalGarbageCollectorMXBean());
         newList.add(new CompleteGarbageCollectorMXBean());
         gcBeanList = newList;
@@ -1731,6 +1748,7 @@ final class GarbageCollectorManagementFactory {
 
         @Override
         public String getName() {
+            /* Changing this name will break assumptions we take in the object replacer. */
             return "young generation scavenger";
         }
 
@@ -1775,6 +1793,7 @@ final class GarbageCollectorManagementFactory {
 
         @Override
         public String getName() {
+            /* Changing this name will break assumptions we take in the object replacer. */
             return "complete scavenger";
         }
 

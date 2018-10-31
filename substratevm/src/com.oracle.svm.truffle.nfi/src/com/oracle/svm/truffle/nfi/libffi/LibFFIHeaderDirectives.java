@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -26,11 +28,17 @@ import java.io.File;
 import java.util.Collections;
 import java.util.List;
 
+import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.c.CContext;
 
 import com.oracle.svm.core.c.ProjectHeaderFile;
 
 public class LibFFIHeaderDirectives implements CContext.Directives {
+    @Override
+    public boolean isInConfiguration() {
+        /* Necessary until GR-7932 is resolved. */
+        return !Platform.includedIn(Platform.WINDOWS.class);
+    }
 
     @Override
     public List<String> getHeaderFiles() {

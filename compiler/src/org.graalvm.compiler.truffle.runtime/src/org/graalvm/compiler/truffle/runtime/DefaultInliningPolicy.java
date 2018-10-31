@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,18 +24,13 @@
  */
 package org.graalvm.compiler.truffle.runtime;
 
-import static org.graalvm.compiler.truffle.common.TruffleCompilerOptions.TruffleInliningMaxCallerSize;
-import static org.graalvm.compiler.truffle.common.TruffleCompilerOptions.TruffleMaximumRecursiveInlining;
-
-import org.graalvm.compiler.truffle.common.TruffleCompilerOptions;
-
 import com.oracle.truffle.api.CompilerOptions;
 
 public class DefaultInliningPolicy implements TruffleInliningPolicy {
 
-    private static final String REASON_RECURSION = "number of recursions > " + TruffleCompilerOptions.getValue(TruffleMaximumRecursiveInlining);
-    private static final String REASON_MAXIMUM_NODE_COUNT = "deepNodeCount * callSites  > " + TruffleCompilerOptions.getValue(TruffleInliningMaxCallerSize);
-    private static final String REASON_MAXIMUM_TOTAL_NODE_COUNT = "totalNodeCount > " + TruffleCompilerOptions.getValue(TruffleInliningMaxCallerSize);
+    private static final String REASON_RECURSION = "number of recursions > " + TruffleRuntimeOptions.getValue(SharedTruffleRuntimeOptions.TruffleMaximumRecursiveInlining);
+    private static final String REASON_MAXIMUM_NODE_COUNT = "deepNodeCount * callSites  > " + TruffleRuntimeOptions.getValue(SharedTruffleRuntimeOptions.TruffleInliningMaxCallerSize);
+    private static final String REASON_MAXIMUM_TOTAL_NODE_COUNT = "totalNodeCount > " + TruffleRuntimeOptions.getValue(SharedTruffleRuntimeOptions.TruffleInliningMaxCallerSize);
 
     @Override
     public double calculateScore(TruffleInliningProfile profile) {
@@ -46,12 +43,12 @@ public class DefaultInliningPolicy implements TruffleInliningPolicy {
             profile.setFailedReason(profile.getCached().getFailedReason());
             return false;
         }
-        if (profile.getRecursions() > TruffleCompilerOptions.getValue(TruffleMaximumRecursiveInlining)) {
+        if (profile.getRecursions() > TruffleRuntimeOptions.getValue(SharedTruffleRuntimeOptions.TruffleMaximumRecursiveInlining)) {
             profile.setFailedReason(REASON_RECURSION);
             return false;
         }
 
-        int inliningMaxCallerSize = TruffleCompilerOptions.getValue(TruffleInliningMaxCallerSize);
+        int inliningMaxCallerSize = TruffleRuntimeOptions.getValue(SharedTruffleRuntimeOptions.TruffleInliningMaxCallerSize);
 
         if (options instanceof GraalCompilerOptions) {
             inliningMaxCallerSize = Math.max(inliningMaxCallerSize, ((GraalCompilerOptions) options).getMinInliningMaxCallerSize());

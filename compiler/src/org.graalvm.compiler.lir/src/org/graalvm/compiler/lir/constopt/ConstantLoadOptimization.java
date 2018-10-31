@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -63,8 +65,8 @@ import jdk.vm.ci.meta.ValueKind;
 
 /**
  * This optimization tries to improve the handling of constants by replacing a single definition of
- * a constant, which is potentially scheduled into a block with high probability, with one or more
- * definitions in blocks with a lower probability.
+ * a constant, which is potentially scheduled into a block with high frequency, with one or more
+ * definitions in blocks with a lower frequency.
  */
 public final class ConstantLoadOptimization extends PreAllocationOptimizationPhase {
 
@@ -269,13 +271,13 @@ public final class ConstantLoadOptimization extends PreAllocationOptimizationPha
             assert usageCount == tree.usageCount() : "Usage count differs: " + usageCount + " vs. " + tree.usageCount();
 
             if (debug.isLogEnabled()) {
-                try (Indent i = debug.logAndIndent("Variable: %s, Block: %s, prob.: %f", tree.getVariable(), tree.getBlock(), tree.getBlock().probability())) {
+                try (Indent i = debug.logAndIndent("Variable: %s, Block: %s, freq.: %f", tree.getVariable(), tree.getBlock(), tree.getBlock().getRelativeFrequency())) {
                     debug.log("Usages result: %s", cost);
                 }
 
             }
 
-            if (cost.getNumMaterializations() > 1 || cost.getBestCost() < tree.getBlock().probability()) {
+            if (cost.getNumMaterializations() > 1 || cost.getBestCost() < tree.getBlock().getRelativeFrequency()) {
                 try (DebugContext.Scope s = debug.scope("CLOmodify", constTree); Indent i = debug.logAndIndent("Replacing %s = %s", tree.getVariable(), tree.getConstant().toValueString())) {
                     // mark original load for removal
                     deleteInstruction(tree);

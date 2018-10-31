@@ -24,22 +24,23 @@
  */
 package com.oracle.truffle.tools.chromeinspector.server;
 
+import java.io.IOException;
+import java.io.PrintStream;
 import java.io.PrintWriter;
-import java.util.HashSet;
+import java.nio.ByteBuffer;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.Semaphore;
 
-import org.json.JSONArray;
-import org.json.JSONException;
-import org.json.JSONObject;
+import org.graalvm.polyglot.io.MessageEndpoint;
 
-import com.oracle.truffle.api.TruffleContext;
-import com.oracle.truffle.api.instrumentation.ContextsListener;
-import com.oracle.truffle.api.instrumentation.EventBinding;
-import com.oracle.truffle.api.nodes.LanguageInfo;
+import com.oracle.truffle.tools.utils.json.JSONArray;
+import com.oracle.truffle.tools.utils.json.JSONException;
+import com.oracle.truffle.tools.utils.json.JSONObject;
 
+import com.oracle.truffle.tools.chromeinspector.TruffleDebugger;
 import com.oracle.truffle.tools.chromeinspector.TruffleExecutionContext;
+import com.oracle.truffle.tools.chromeinspector.TruffleProfiler;
+import com.oracle.truffle.tools.chromeinspector.TruffleRuntime;
 import com.oracle.truffle.tools.chromeinspector.commands.Command;
 import com.oracle.truffle.tools.chromeinspector.commands.ErrorResponse;
 import com.oracle.truffle.tools.chromeinspector.commands.Params;
@@ -52,84 +53,55 @@ import com.oracle.truffle.tools.chromeinspector.events.EventHandler;
 import com.oracle.truffle.tools.chromeinspector.types.CallArgument;
 import com.oracle.truffle.tools.chromeinspector.types.Location;
 
-public final class InspectServerSession {
+public final class InspectServerSession implements MessageEndpoint {
 
     private final RuntimeDomain runtime;
     private final DebuggerDomain debugger;
     private final ProfilerDomain profiler;
     private final TruffleExecutionContext context;
-    private final EventBinding<?> binding;
-    private final Semaphore endPermission = new Semaphore(1);
-    private volatile MessageListener messageListener;
+    private volatile MessageEndpoint messageEndpoint;
     private CommandProcessThread processThread;
 
-    public InspectServerSession(RuntimeDomain runtime, DebuggerDomain debugger, ProfilerDomain profiler,
+    private InspectServerSession(RuntimeDomain runtime, DebuggerDomain debugger, ProfilerDomain profiler,
                     TruffleExecutionContext context) {
         this.runtime = runtime;
         this.debugger = debugger;
         this.profiler = profiler;
         this.context = context;
-        endPermission.drainPermits();
-        this.binding = context.getEnv().getInstrumenter().attachContextsListener(new ContextsListener() {
-            private HashSet<TruffleContext> contexts = new HashSet<>();
-
-            @Override
-            public void onContextCreated(TruffleContext ctx) {
-                contexts.add(ctx);
-            }
-
-            @Override
-            public void onLanguageContextCreated(TruffleContext ctx, LanguageInfo language) {
-            }
-
-            @Override
-            public void onLanguageContextInitialized(TruffleContext ctx, LanguageInfo language) {
-            }
-
-            @Override
-            public void onLanguageContextFinalized(TruffleContext ctx, LanguageInfo language) {
-            }
-
-            @Override
-            public void onLanguageContextDisposed(TruffleContext ctx, LanguageInfo language) {
-            }
-
-            @Override
-            public void onContextClosed(TruffleContext ctx) {
-                if (contexts.remove(ctx) && contexts.isEmpty() && !endPermission.tryAcquire()) {
-                    PrintWriter info = new PrintWriter(context.getEnv().out());
-                    info.println("Waiting for the debugger to disconnect...");
-                    info.flush();
-                    try {
-                        endPermission.acquire();
-                    } catch (InterruptedException ex) {
-                    }
-                }
-            }
-        }, true);
     }
 
-    public void dispose() {
+    public static InspectServerSession create(TruffleExecutionContext context, boolean debugBreak, ConnectionWatcher connectionWatcher) {
+        RuntimeDomain runtime = new TruffleRuntime(context);
+        DebuggerDomain debugger = new TruffleDebugger(context, debugBreak);
+        ProfilerDomain profiler = new TruffleProfiler(context, connectionWatcher);
+        return new InspectServerSession(runtime, debugger, profiler, context);
+    }
+
+    @Override
+    public void sendClose() {
         runtime.disable();
         debugger.disable();
         profiler.disable();
-        endPermission.release();
-        binding.dispose();
-        messageListener = null;
+        context.reset();
+        messageEndpoint = null;
         processThread.dispose();
+        processThread = null;
     }
 
-    public void setMessageListener(MessageListener messageListener) {
-        this.messageListener = messageListener;
-        EventHandler eh = new EventHandlerImpl();
-        runtime.setEventHandler(eh);
-        debugger.setEventHandler(eh);
-        profiler.setEventHandler(eh);
-        processThread = new CommandProcessThread();
-        processThread.start();
+    public void setMessageListener(MessageEndpoint messageListener) {
+        this.messageEndpoint = messageListener;
+        if (processThread == null) {
+            EventHandler eh = new EventHandlerImpl();
+            runtime.setEventHandler(eh);
+            debugger.setEventHandler(eh);
+            profiler.setEventHandler(eh);
+            processThread = new CommandProcessThread();
+            processThread.start();
+        }
     }
 
-    public void onMessage(String message) {
+    @Override
+    public void sendText(String message) {
         Command cmd;
         try {
             cmd = new Command(message);
@@ -141,6 +113,19 @@ public final class InspectServerSession {
             return;
         }
         processThread.push(cmd);
+    }
+
+    @Override
+    public void sendBinary(ByteBuffer data) {
+        throw new UnsupportedOperationException("Binary messages are not supported.");
+    }
+
+    @Override
+    public void sendPing(ByteBuffer data) {
+    }
+
+    @Override
+    public void sendPong(ByteBuffer data) {
     }
 
     private Params processCommand(Command cmd, CommandPostProcessor postProcessor) throws CommandProcessException {
@@ -242,7 +227,10 @@ public final class InspectServerSession {
                 debugger.setPauseOnExceptions(cmd.getParams().getState());
                 break;
             case "Debugger.setBreakpointsActive":
-                debugger.setBreakpointsActive(cmd.getParams().getBreakpointsActive());
+                debugger.setBreakpointsActive(cmd.getParams().getBoolean("active"));
+                break;
+            case "Debugger.setSkipAllPauses":
+                debugger.setSkipAllPauses(cmd.getParams().getBoolean("skip"));
                 break;
             case "Debugger.setBreakpointByUrl":
                 json = cmd.getParams().getJSONObject();
@@ -269,6 +257,10 @@ public final class InspectServerSession {
             case "Debugger.restartFrame":
                 json = cmd.getParams().getJSONObject();
                 resultParams = debugger.restartFrame(cmd.getId(), json.optString("callFrameId"), postProcessor);
+                break;
+            case "Debugger.setReturnValue":
+                json = cmd.getParams().getJSONObject();
+                debugger.setReturnValue(CallArgument.get(json.getJSONObject("newValue")));
                 break;
             case "Debugger.setVariableValue":
                 json = cmd.getParams().getJSONObject();
@@ -351,17 +343,20 @@ public final class InspectServerSession {
 
         @Override
         public void event(Event event) {
-            MessageListener listener = messageListener;
+            MessageEndpoint listener = messageEndpoint;
             if (listener != null) {
-                listener.sendMessage(event.toJSONString());
+                try {
+                    listener.sendText(event.toJSONString());
+                } catch (IOException ex) {
+                    PrintStream log = context.getLogger();
+                    if (log != null) {
+                        ex.printStackTrace(log);
+                        log.flush();
+                    }
+                }
             }
         }
 
-    }
-
-    public interface MessageListener {
-
-        void sendMessage(String message);
     }
 
     /**
@@ -445,9 +440,17 @@ public final class InspectServerSession {
                     resultMsg = new ErrorResponse(cmd.getId(), -32601, "Processing of '" + cmd.getMethod() + "' has caused " + t.getLocalizedMessage()).toJSONString();
                 }
                 if (resultMsg != null) {
-                    MessageListener listener = messageListener;
+                    MessageEndpoint listener = messageEndpoint;
                     if (listener != null) {
-                        listener.sendMessage(resultMsg);
+                        try {
+                            listener.sendText(resultMsg);
+                        } catch (IOException ex) {
+                            PrintStream log = context.getLogger();
+                            if (log != null) {
+                                ex.printStackTrace(log);
+                                log.flush();
+                            }
+                        }
                     }
                 }
                 postProcessor.run();

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -96,12 +96,11 @@ public final class SLMain {
         out.println("== running on " + context.getEngine());
 
         try {
-            Value main = context.eval(source);
-            if (context.lookup(SL, "main") == null) {
+            Value result = context.eval(source);
+            if (context.getBindings(SL).getMember("main") == null) {
                 System.err.println("No function main() defined in SL source file.");
                 return 1;
             }
-            Value result = main.execute();
             if (!result.isNull()) {
                 out.println(result.toString());
             }

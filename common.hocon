@@ -1,44 +1,54 @@
 # overlay version
-overlay = 6d445f13917f2a6d8094e5fe6d23b68cbd992fb9
+overlay = 57c19fbc7c3a195984372c01b3e09b34cb76e847
 
+# oraclejdk* are released OracleJDK binaries
 # labsjdk* are JDKs based on OracleJDK binaries
-# openjdk* are JDKs based on OpenJDK binaries
+# openjdk8 JDKs on Linux are built by Oracle Labs
+# openjdk8 JDKs on macOS are based on AdoptOpenJDK binaries
 jdks: {
-  labsjdk8 : {name : labsjdk, version : "8u151-jvmci-0.40", platformspecific: true}
-  labsjdk9 : {name : labsjdk, version : "9+181", platformspecific: true}
-  labsjdk8Debug : {name : labsjdk, version : "8u151-jvmci-0.40-fastdebug", platformspecific: true}
+  labsjdk8:      {name : labsjdk,   version : "8u192-jvmci-0.49", platformspecific: true}
+  openjdk8:      {name : openjdk,   version : "8u192-jvmci-0.49", platformspecific: true}
+  labsjdk8Debug: {name : labsjdk,   version : "8u192-jvmci-0.49-fastdebug", platformspecific: true}
+  oraclejdk11:   {name : oraclejdk, version : "11+28", platformspecific: true}
+  openjdk11:     {name : openjdk,   version : "11+28", platformspecific: true}
 
-  # Strictly speaking, this is labsjdk-jdk-hs-snapshot but for
-  # readability we use the java.specification.version reported by the snapshot.
-  # This means the name will change to labsjdk11 at some point.
-  labsjdk10 : {name : labsjdk, version : "20180130-162725", platformspecific: true}
+  # Snapshot of http://hg.openjdk.java.net/jdk/jdk
+  oraclejdkSNAPSHOT : {name : labsjdk, version : "20180808-073750", platformspecific: true}
+
 }
 
-# Overlay placeholder for pinning mx to a specific revision
-mx : {}
+# This must always point to HEAD in the master branch but can be used to point
+# to another branch/commit in a Graal PR when mx changes are required for the PR.
+mx : {
+  packages : {
+    mx: "HEAD"
+  }
+}
 
-labsjdk8 :      { downloads : { JAVA_HOME : ${jdks.labsjdk8} }}
-labsjdk8Debug : { downloads : { JAVA_HOME : ${jdks.labsjdk8Debug} }}
+labsjdk8 :      { downloads : { JAVA_HOME : ${jdks.labsjdk8},      EXTRA_JAVA_HOMES : { pathlist :[ ${jdks.oraclejdk11} ]} }}
+labsjdk8Debug : { downloads : { JAVA_HOME : ${jdks.labsjdk8Debug}, EXTRA_JAVA_HOMES : { pathlist :[ ${jdks.oraclejdk11} ]} }}
 
-# GR-5675
-# openjdk8 :      { downloads : { JAVA_HOME : ${jdks.openjdk8} }}
+openjdk8 :        { downloads : { JAVA_HOME : ${jdks.openjdk8} }}
 
-labsjdk9 :      { downloads : { JAVA_HOME : ${jdks.labsjdk9},   EXTRA_JAVA_HOMES : { pathlist :[ ${jdks.labsjdk8} ]} }}
-labsjdk10 :     { downloads : { JAVA_HOME : ${jdks.labsjdk10},  EXTRA_JAVA_HOMES : { pathlist :[ ${jdks.labsjdk8} ]} }}
+oraclejdk11 :     { downloads : { JAVA_HOME : ${jdks.oraclejdk11} }}
+openjdk11 :       { downloads : { JAVA_HOME : ${jdks.openjdk11} }}
 
 common : ${mx} {
   timelimit : "30:00"
   catch_files : [
     "Graal diagnostic output saved in (?P<filename>.+\.zip)"
   ]
+  packages : {
+    "pip:astroid" : "==1.1.0"
+    "pip:pylint" : "==1.1.0"
+  }
 }
 
 linux : ${common} {
   packages : {
     git : ">=1.8.3"
     mercurial : ">=2.2"
-    "pip:astroid" : "==1.1.0"
-    "pip:pylint" : "==1.1.0"
+    "apache/ant": ">=1.9.4"
   }
 }
 
@@ -46,19 +56,17 @@ solaris : ${common} {
   packages : {
     git : ">=1.8.3"
     mercurial : ">=2.2"
-    "pip:astroid" : "==1.1.0"
-    "pip:pylint" : "==1.1.0"
+    "apache/ant": ">=1.9.4"
   }
 }
 
 darwin : ${common} {
-  packages : {
-    "pip:astroid" : "==1.1.0"
-    "pip:pylint" : "==1.1.0"
-  }
   environment : {
     PATH : "/usr/local/bin:$PATH"
   }
+}
+
+windows : ${common} {
 }
 
 linux-amd64 : ${linux} {
@@ -69,12 +77,20 @@ darwin-amd64 : ${darwin} {
   capabilities : [darwin_next, amd64]
 }
 
+windows-amd64 : ${windows} {
+  capabilities : [windows, amd64]
+}
+
 solaris-sparcv9 : ${solaris} {
   capabilities : [solaris, sparcv9]
 }
 
 linux-sparcv9 : ${linux} {
   capabilities : [linux, sparcv9]
+}
+
+linux-aarch64 : ${linux} {
+  capabilities : [linux, aarch64]
 }
 
 eclipse : {
@@ -93,7 +109,7 @@ jdt : {
 }
 
 # for cases where a maven package is not easily accessible
-maven-download-unix : ${labsjdk8} {
+maven-download-unix : {
   downloads : {
     MAVEN_HOME: {name: maven, version: "3.3.9", platformspecific: false}
   }
@@ -116,22 +132,6 @@ darwin-deploy : ${darwin} ${maven-download-unix} {
   }
 }
 
-deploy-binaries : ${labsjdk8} {
-  targets : [post-merge, deploy]
-  run : [
-    ["mx", "--strict-compliance", "build"]
-    ["mx", "deploy-binary", "--all-suites", "--skip-existing", ${binaries-repository}]
-  ]
-}
-
-maven-deploy-dry-run : ${labsjdk8} {
-  targets : [gate]
-  run : [
-    ["mx", "--strict-compliance", "build"]
-    ["mx", "maven-deploy", "--validate", "full", "--licenses", "GPLv2-CPE,UPL", "--dry-run", "ossrh", "https://this-is-only-a-test"]
-  ]
-}
-
 svm-common: ${mx} {
   environment: {
     DEFAULT_VM: "server"
@@ -147,7 +147,7 @@ svm-common: ${mx} {
   ]
 }
 
-svm-common-linux: ${svm-common} ${linux-amd64} {
+svm-common-linux-amd64: ${svm-common} ${linux-amd64} {
   packages: {
     make: ">=3.83"
     gcc-build-essentials: ">=4.9.1" # GCC 4.9.0 fails on cluster
@@ -157,19 +157,38 @@ svm-common-linux: ${svm-common} ${linux-amd64} {
   timelimit: "55:00"
 }
 
-svm-capabilities-fast : {
-  capabilities : [linux, amd64, fast]
+svm-common-linux-aarch64: ${svm-common} ${linux-aarch64} {
+  packages: {
+    make: ">=3.83"
+    gcc-build-essentials: ">=4.9.1" # GCC 4.9.0 fails on cluster
+    ruby: ">=2.1.0"
+    valgrind: ">=3.9.0"
+  }
+  timelimit: "55:00"
+}
+
+# fast is necessary here as slow machines don't handle image builds well
+svm-capabilities: [linux, amd64, fast]
+svm-capabilities-base : {
+  capabilities : ${svm-capabilities}
 }
 
 svm-capabilities-avx2 : {
-  capabilities : [linux, amd64, avx2]
+  capabilities : ${svm-capabilities} [avx2]
 }
 
 svm-capabilities-manycores : {
-  capabilities : [linux, amd64, manycores, fast]
+  capabilities : ${svm-capabilities} [manycores]
 }
 
 svm-common-darwin: ${svm-common} ${darwin-amd64} {
+  timelimit: "45:00"
+}
+
+svm-common-windows: ${svm-common} ${windows-amd64} {
+  packages : {
+    msvc : "==10.0"
+  }
   timelimit: "45:00"
 }
 
@@ -178,4 +197,3 @@ svm-common-sulong: {
     llvm: "==3.8"
   }
 }
-

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -113,22 +115,18 @@ public abstract class PartialEscapeClosure<BlockT extends PartialEscapeBlockStat
         /*
          * If there is a mismatch between the number of materializations and the number of
          * virtualizations, we need to apply effects, even if there were no other significant
-         * changes to the graph.
+         * changes to the graph. This applies to each block, since moving from one block to the
+         * other can also be important (if the probabilities of the block differ).
          */
-        int delta = 0;
         for (Block block : cfg.getBlocks()) {
             GraphEffectList effects = blockEffects.get(block);
             if (effects != null) {
-                delta += effects.getVirtualizationDelta();
+                if (effects.getVirtualizationDelta() != 0) {
+                    return true;
+                }
             }
         }
-        for (Loop<Block> loop : cfg.getLoops()) {
-            GraphEffectList effects = loopMergeEffects.get(loop);
-            if (effects != null) {
-                delta += effects.getVirtualizationDelta();
-            }
-        }
-        return delta != 0;
+        return false;
     }
 
     private final class CollectVirtualObjectsClosure extends NodeClosure<ValueNode> {
@@ -650,7 +648,9 @@ public abstract class PartialEscapeClosure<BlockT extends PartialEscapeBlockStat
             if (needsCaching) {
                 return getValueObjectVirtualCached(phi, virtual);
             } else {
-                return virtual.duplicate();
+                VirtualObjectNode duplicate = virtual.duplicate();
+                duplicate.setNodeSourcePosition(virtual.getNodeSourcePosition());
+                return duplicate;
             }
         }
 
@@ -661,6 +661,7 @@ public abstract class PartialEscapeClosure<BlockT extends PartialEscapeBlockStat
             VirtualObjectNode result = valueObjectVirtuals.get(phi);
             if (result == null) {
                 result = virtual.duplicate();
+                result.setNodeSourcePosition(virtual.getNodeSourcePosition());
                 valueObjectVirtuals.put(phi, result);
             }
             return result;
@@ -857,7 +858,7 @@ public abstract class PartialEscapeClosure<BlockT extends PartialEscapeBlockStat
                                     // rewrite to a zero constant of the larger kind
                                     debug.log("Rewriting entry %s to constant of larger size", valueIndex);
                                     states[i].setEntry(object, valueIndex, ConstantNode.defaultForKind(twoSlotKinds[valueIndex], graph()));
-                                    states[i].setEntry(object, valueIndex + 1, ConstantNode.forConstant(JavaConstant.forIllegal(), tool.getMetaAccessProvider(), graph()));
+                                    states[i].setEntry(object, valueIndex + 1, ConstantNode.forConstant(JavaConstant.forIllegal(), tool.getMetaAccess(), graph()));
                                 } else {
                                     compatible = false;
                                     break outer;
@@ -889,7 +890,7 @@ public abstract class PartialEscapeClosure<BlockT extends PartialEscapeBlockStat
                         // skip an entry after a long/double value that occupies two int slots
                         valueIndex++;
                         phis[valueIndex] = null;
-                        values[valueIndex] = ConstantNode.forConstant(JavaConstant.forIllegal(), tool.getMetaAccessProvider(), graph());
+                        values[valueIndex] = ConstantNode.forConstant(JavaConstant.forIllegal(), tool.getMetaAccess(), graph());
                     }
                     valueIndex++;
                 }

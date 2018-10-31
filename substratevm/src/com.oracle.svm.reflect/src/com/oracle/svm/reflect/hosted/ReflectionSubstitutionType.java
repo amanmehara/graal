@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -24,11 +26,14 @@ package com.oracle.svm.reflect.hosted;
 
 // Checkstyle: allow reflection
 
+import static com.oracle.svm.reflect.hosted.ReflectionSubstitution.getStableProxyName;
+
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Member;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 
 import org.graalvm.compiler.core.common.calc.FloatConvert;
 import org.graalvm.compiler.core.common.type.StampFactory;
@@ -53,6 +58,8 @@ import org.graalvm.compiler.nodes.java.InstanceOfNode;
 import org.graalvm.compiler.nodes.java.LoadFieldNode;
 import org.graalvm.compiler.nodes.java.NewInstanceNode;
 import org.graalvm.compiler.nodes.java.StoreFieldNode;
+import org.graalvm.nativeimage.ImageSingletons;
+import org.graalvm.nativeimage.impl.RuntimeReflectionSupport;
 
 import com.oracle.graal.pointsto.meta.HostedProviders;
 import com.oracle.svm.core.util.VMError;
@@ -60,8 +67,8 @@ import com.oracle.svm.hosted.annotation.CustomSubstitutionField;
 import com.oracle.svm.hosted.annotation.CustomSubstitutionMethod;
 import com.oracle.svm.hosted.annotation.CustomSubstitutionType;
 import com.oracle.svm.hosted.phases.HostedGraphKit;
+import com.oracle.svm.reflect.helpers.ExceptionHelpers;
 import com.oracle.svm.reflect.hosted.ReflectionSubstitutionType.ReflectionSubstitutionMethod;
-import com.oracle.svm.reflect.proxies.ExceptionHelpers;
 
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
@@ -71,9 +78,11 @@ import jdk.vm.ci.meta.ResolvedJavaType;
 
 public final class ReflectionSubstitutionType extends CustomSubstitutionType<CustomSubstitutionField, ReflectionSubstitutionMethod> {
 
+    private String stableName;
+
     public ReflectionSubstitutionType(ResolvedJavaType original, Member member) {
         super(original);
-
+        stableName = "L" + getStableProxyName(member).replace(".", "/") + ";";
         for (ResolvedJavaMethod method : original.getDeclaredMethods()) {
             switch (method.getName()) {
                 case "invoke":
@@ -107,31 +116,31 @@ public final class ReflectionSubstitutionType extends CustomSubstitutionType<Cus
                     addSubstitutionMethod(method, new ReflectiveReadMethod(method, (Field) member, JavaKind.Double));
                     break;
                 case "set":
-                    addSubstitutionMethod(method, new ReflectiveWriteMethod(method, (Field) member, JavaKind.Object));
+                    addSubstitutionMethod(method, createWriteMethod(method, (Field) member, JavaKind.Object));
                     break;
                 case "setBoolean":
-                    addSubstitutionMethod(method, new ReflectiveWriteMethod(method, (Field) member, JavaKind.Boolean));
+                    addSubstitutionMethod(method, createWriteMethod(method, (Field) member, JavaKind.Boolean));
                     break;
                 case "setByte":
-                    addSubstitutionMethod(method, new ReflectiveWriteMethod(method, (Field) member, JavaKind.Byte));
+                    addSubstitutionMethod(method, createWriteMethod(method, (Field) member, JavaKind.Byte));
                     break;
                 case "setShort":
-                    addSubstitutionMethod(method, new ReflectiveWriteMethod(method, (Field) member, JavaKind.Short));
+                    addSubstitutionMethod(method, createWriteMethod(method, (Field) member, JavaKind.Short));
                     break;
                 case "setChar":
-                    addSubstitutionMethod(method, new ReflectiveWriteMethod(method, (Field) member, JavaKind.Char));
+                    addSubstitutionMethod(method, createWriteMethod(method, (Field) member, JavaKind.Char));
                     break;
                 case "setInt":
-                    addSubstitutionMethod(method, new ReflectiveWriteMethod(method, (Field) member, JavaKind.Int));
+                    addSubstitutionMethod(method, createWriteMethod(method, (Field) member, JavaKind.Int));
                     break;
                 case "setLong":
-                    addSubstitutionMethod(method, new ReflectiveWriteMethod(method, (Field) member, JavaKind.Long));
+                    addSubstitutionMethod(method, createWriteMethod(method, (Field) member, JavaKind.Long));
                     break;
                 case "setFloat":
-                    addSubstitutionMethod(method, new ReflectiveWriteMethod(method, (Field) member, JavaKind.Float));
+                    addSubstitutionMethod(method, createWriteMethod(method, (Field) member, JavaKind.Float));
                     break;
                 case "setDouble":
-                    addSubstitutionMethod(method, new ReflectiveWriteMethod(method, (Field) member, JavaKind.Double));
+                    addSubstitutionMethod(method, createWriteMethod(method, (Field) member, JavaKind.Double));
                     break;
                 case "newInstance":
                     addSubstitutionMethod(method, new ReflectiveNewInstanceMethod(method, (Constructor<?>) member));
@@ -151,9 +160,18 @@ public final class ReflectionSubstitutionType extends CustomSubstitutionType<Cus
         }
     }
 
+    private static ReflectionSubstitutionMethod createWriteMethod(ResolvedJavaMethod method, Field field, JavaKind kind) {
+        ReflectionDataBuilder reflectionDataBuilder = (ReflectionDataBuilder) ImageSingletons.lookup(RuntimeReflectionSupport.class);
+        if (Modifier.isFinal(field.getModifiers()) && !reflectionDataBuilder.inspectFinalFieldWritableForAnalysis(field)) {
+            return new ThrowingMethod(method, IllegalAccessException.class, "Cannot set final field: " + field.getName() + ". " +
+                            "Enable by specifying \"allowWrite\" for this field in the reflection configuration.");
+        }
+        return new ReflectiveWriteMethod(method, field, kind);
+    }
+
     @Override
     public String getName() {
-        return original.getName();
+        return stableName;
     }
 
     public abstract static class ReflectionSubstitutionMethod extends CustomSubstitutionMethod {
@@ -173,7 +191,7 @@ public final class ReflectionSubstitutionType extends CustomSubstitutionType<Cus
         JavaConstant expected = graphKit.getConstantReflection().asJavaClass(expectedType);
         ValueNode expectedNode = graphKit.createConstant(expected, JavaKind.Object);
 
-        ValueNode exception = graphKit.createJavaCall(InvokeKind.Static, createFailedCast, expectedNode, actual);
+        ValueNode exception = graphKit.createJavaCallWithExceptionAndUnwind(InvokeKind.Static, createFailedCast, expectedNode, actual);
         graphKit.append(new UnwindNode(exception));
     }
 
@@ -229,7 +247,7 @@ public final class ReflectionSubstitutionType extends CustomSubstitutionType<Cus
             }
         }
 
-        graphKit.createJavaCall(InvokeKind.Special, cons, ite, exception);
+        graphKit.createJavaCallWithExceptionAndUnwind(InvokeKind.Special, cons, ite, exception);
 
         graphKit.append(new UnwindNode(ite));
     }
@@ -248,7 +266,7 @@ public final class ReflectionSubstitutionType extends CustomSubstitutionType<Cus
         JavaConstant msg = graphKit.getConstantReflection().forString(message);
         ValueNode msgNode = graphKit.createConstant(msg, JavaKind.Object);
         ValueNode cause = graphKit.createConstant(JavaConstant.NULL_POINTER, JavaKind.Object);
-        graphKit.createJavaCall(InvokeKind.Special, cons, ite, msgNode, cause);
+        graphKit.createJavaCallWithExceptionAndUnwind(InvokeKind.Special, cons, ite, msgNode, cause);
 
         graphKit.append(new UnwindNode(ite));
     }
@@ -260,7 +278,7 @@ public final class ReflectionSubstitutionType extends CustomSubstitutionType<Cus
 
         switch (to) {
             case Object:
-                // boxing is always possible
+                // boxing can be possible
                 return true;
             case Boolean:
             case Char:
@@ -434,9 +452,14 @@ public final class ReflectionSubstitutionType extends CustomSubstitutionType<Cus
                         graphKit.createReturn(null, JavaKind.Void);
                     }
                 } else {
-                    value = doImplicitCast(graphKit, kind, fieldKind, value);
-                    graphKit.append(new StoreFieldNode(receiver, targetField, value));
-                    graphKit.createReturn(null, JavaKind.Void);
+                    // kind == PrimitiveKind
+                    if (fieldKind == JavaKind.Object && !field.getType().equals(kind.toBoxedJavaClass())) {
+                        throwIllegalArgumentException(graphKit, "cannot write field of type " + targetField.getJavaKind() + " with Field." + method.getName());
+                    } else {
+                        value = doImplicitCast(graphKit, kind, fieldKind, value);
+                        graphKit.append(new StoreFieldNode(receiver, targetField, value));
+                        graphKit.createReturn(null, JavaKind.Void);
+                    }
                 }
 
             } else {
@@ -650,4 +673,40 @@ public final class ReflectionSubstitutionType extends CustomSubstitutionType<Cus
             return graphKit.getGraph();
         }
     }
+
+    private static final class ThrowingMethod extends ReflectionSubstitutionMethod {
+
+        private final Class<? extends Throwable> exceptionClass;
+        private final String message;
+
+        private ThrowingMethod(ResolvedJavaMethod original, Class<? extends Throwable> exceptionClass, String message) {
+            super(original);
+            this.exceptionClass = exceptionClass;
+            this.message = message;
+        }
+
+        @Override
+        public StructuredGraph buildGraph(DebugContext ctx, ResolvedJavaMethod method, HostedProviders providers, Purpose purpose) {
+            HostedGraphKit graphKit = new HostedGraphKit(ctx, providers, method);
+            ResolvedJavaType exceptionType = graphKit.getMetaAccess().lookupJavaType(exceptionClass);
+            ValueNode instance = graphKit.append(new NewInstanceNode(exceptionType, true));
+            ResolvedJavaMethod cons = null;
+            for (ResolvedJavaMethod c : exceptionType.getDeclaredConstructors()) {
+                if (c.getSignature().getParameterCount(false) == 1) {
+                    ResolvedJavaType stringType = providers.getMetaAccess().lookupJavaType(String.class);
+                    if (c.getSignature().getParameterType(0, null).equals(stringType)) {
+                        cons = c;
+                    }
+                }
+            }
+            JavaConstant msg = graphKit.getConstantReflection().forString(message);
+            ValueNode msgNode = graphKit.createConstant(msg, JavaKind.Object);
+            graphKit.createJavaCallWithExceptionAndUnwind(InvokeKind.Special, cons, instance, msgNode);
+            graphKit.append(new UnwindNode(instance));
+            graphKit.mergeUnwinds();
+            assert graphKit.getGraph().verify();
+            return graphKit.getGraph();
+        }
+    }
+
 }

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -150,7 +152,7 @@ public class SPARCHotSpotBackend extends HotSpotHostBackend {
 
     @Override
     public LIRGenerationResult newLIRGenerationResult(CompilationIdentifier compilationId, LIR lir, FrameMapBuilder frameMapBuilder, StructuredGraph graph, Object stub) {
-        return new HotSpotLIRGenerationResult(compilationId, lir, frameMapBuilder, makeCallingConvention(graph, (Stub) stub), stub);
+        return new HotSpotLIRGenerationResult(compilationId, lir, frameMapBuilder, makeCallingConvention(graph, (Stub) stub), stub, config.requiresReservedStackCheck(graph.getMethods()));
     }
 
     @Override
@@ -191,17 +193,19 @@ public class SPARCHotSpotBackend extends HotSpotHostBackend {
         @Override
         public void enter(CompilationResultBuilder crb) {
             final int frameSize = crb.frameMap.totalFrameSize();
-            final int stackpoinerChange = -frameSize;
+            final int stackpointerChange = -frameSize;
             SPARCMacroAssembler masm = (SPARCMacroAssembler) crb.asm;
-            emitStackOverflowCheck(crb);
+            if (!isStub) {
+                emitStackOverflowCheck(crb);
+            }
 
-            if (SPARCAssembler.isSimm13(stackpoinerChange)) {
-                masm.save(sp, stackpoinerChange, sp);
+            if (SPARCAssembler.isSimm13(stackpointerChange)) {
+                masm.save(sp, stackpointerChange, sp);
             } else {
                 try (ScratchRegister sc = masm.getScratchRegister()) {
                     Register scratch = sc.getRegister();
                     assert isGlobalRegister(scratch) : "Only global registers are allowed before save. Got register " + scratch;
-                    masm.setx(stackpoinerChange, scratch, false);
+                    masm.setx(stackpointerChange, scratch, false);
                     masm.save(sp, scratch, sp);
                 }
             }
@@ -241,7 +245,7 @@ public class SPARCHotSpotBackend extends HotSpotHostBackend {
         OptionValues options = lir.getOptions();
         DebugContext debug = lir.getDebug();
         CompilationResultBuilder crb = factory.createBuilder(getProviders().getCodeCache(), getProviders().getForeignCalls(), frameMap, masm, dataBuilder, frameContext, options, debug,
-                        compilationResult);
+                        compilationResult, Register.None);
         crb.setTotalFrameSize(frameMap.totalFrameSize());
         crb.setMaxInterpreterFrameSize(gen.getMaxInterpreterFrameSize());
         StackSlot deoptimizationRescueSlot = gen.getDeoptimizationRescueSlot();

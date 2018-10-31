@@ -1,30 +1,45 @@
 /*
- * Copyright (c) 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api.debug;
 
-import java.io.IOException;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.NoSuchElementException;
@@ -41,6 +56,7 @@ import com.oracle.truffle.api.nodes.LanguageInfo;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.source.SourceSection;
+import java.util.Objects;
 
 /**
  * Represents a frame in the guest language stack. A guest language stack frame consists of a
@@ -118,7 +134,7 @@ public final class DebugStackFrame implements Iterable<DebugValue> {
      *
      * @since 0.17
      */
-    public String getName() {
+    public String getName() throws DebugException {
         verifyValidState(true);
         RootNode root = findCurrentRoot();
         if (root == null) {
@@ -126,14 +142,11 @@ public final class DebugStackFrame implements Iterable<DebugValue> {
         }
         try {
             return root.getName();
-        } catch (Throwable e) {
-            /* Throw error if assertions are enabled. */
-            try {
-                assert false;
-            } catch (AssertionError e1) {
-                throw e;
-            }
-            return null;
+        } catch (ThreadDeath td) {
+            throw td;
+        } catch (Throwable ex) {
+            Debugger debugger = event.getSession().getDebugger();
+            throw new DebugException(debugger, ex, root.getLanguageInfo(), null, true, null);
         }
     }
 
@@ -161,6 +174,22 @@ public final class DebugStackFrame implements Iterable<DebugValue> {
     }
 
     /**
+     * Returns public information about the language of this frame.
+     *
+     * @return the language info, or <code>null</code> when no language is associated with this
+     *         frame.
+     * @since 1.0
+     */
+    public LanguageInfo getLanguage() {
+        verifyValidState(true);
+        RootNode root = findCurrentRoot();
+        if (root == null) {
+            return null;
+        }
+        return root.getLanguageInfo();
+    }
+
+    /**
      * Get the current inner-most scope. The scope remain valid as long as the current stack frame
      * remains valid.
      * <p>
@@ -171,9 +200,10 @@ public final class DebugStackFrame implements Iterable<DebugValue> {
      *
      * @return the scope, or <code>null</code> when no language is associated with this frame
      *         location, or when no local scope exists.
+     * @throws DebugException when guest language code throws an exception
      * @since 0.26
      */
-    public DebugScope getScope() {
+    public DebugScope getScope() throws DebugException {
         verifyValidState(false);
         SuspendedContext context = getContext();
         RootNode root = findCurrentRoot();
@@ -186,18 +216,25 @@ public final class DebugStackFrame implements Iterable<DebugValue> {
         } else {
             node = currentFrame.getCallNode();
         }
-        if (node.getRootNode().getLanguageInfo() == null) {
+        LanguageInfo languageInfo = node.getRootNode().getLanguageInfo();
+        if (languageInfo == null) {
             // no language, no scopes
             return null;
         }
         Debugger debugger = event.getSession().getDebugger();
         MaterializedFrame frame = findTruffleFrame();
-        Iterable<Scope> scopes = debugger.getEnv().findLocalScopes(node, frame);
-        Iterator<Scope> it = scopes.iterator();
-        if (!it.hasNext()) {
-            return null;
+        try {
+            Iterable<Scope> scopes = debugger.getEnv().findLocalScopes(node, frame);
+            Iterator<Scope> it = scopes.iterator();
+            if (!it.hasNext()) {
+                return null;
+            }
+            return new DebugScope(it.next(), it, debugger, event, frame, root);
+        } catch (ThreadDeath td) {
+            throw td;
+        } catch (Throwable ex) {
+            throw new DebugException(debugger, ex, languageInfo, null, true, null);
         }
-        return new DebugScope(it.next(), it, debugger, event, frame, root);
     }
 
     /**
@@ -254,16 +291,15 @@ public final class DebugStackFrame implements Iterable<DebugValue> {
      *
      * @param code the code to evaluate
      * @return the return value of the expression
+     * @throws DebugException when guest language code throws an exception
+     * @throws IllegalStateException if called on another thread than this frame was created with,
+     *             or if {@link #getLanguage() language} of this frame is not
+     *             {@link LanguageInfo#isInteractive() interactive}.
      * @since 0.17
      */
-    public DebugValue eval(String code) {
+    public DebugValue eval(String code) throws DebugException {
         verifyValidState(false);
-        Object result;
-        try {
-            result = DebuggerSession.evalInContext(event, code, currentFrame);
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
+        Object result = DebuggerSession.evalInContext(event, code, currentFrame);
         return wrapHeapValue(result);
     }
 
@@ -338,6 +374,28 @@ public final class DebugStackFrame implements Iterable<DebugValue> {
                 return var;
             }
         };
+    }
+
+    /**
+     * @since 1.0
+     */
+    @Override
+    public boolean equals(Object obj) {
+        if (obj instanceof DebugStackFrame) {
+            DebugStackFrame other = (DebugStackFrame) obj;
+            return event == other.event &&
+                            (currentFrame == other.currentFrame ||
+                                            currentFrame != null && other.currentFrame != null && currentFrame.getFrame(FrameAccess.READ_ONLY) == other.currentFrame.getFrame(FrameAccess.READ_ONLY));
+        }
+        return false;
+    }
+
+    /**
+     * @since 1.0
+     */
+    @Override
+    public int hashCode() {
+        return Objects.hash(event, currentFrame);
     }
 
     MaterializedFrame findTruffleFrame() {

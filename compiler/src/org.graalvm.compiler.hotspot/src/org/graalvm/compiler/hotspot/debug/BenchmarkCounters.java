@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -73,7 +75,7 @@ import jdk.vm.ci.hotspot.HotSpotJVMCIRuntime;
  */
 public class BenchmarkCounters {
 
-    static class Options {
+    public static class Options {
 
         //@formatter:off
         @Option(help = "Turn on the benchmark counters, and displays the results on VM shutdown", type = OptionType.Debug)
@@ -93,6 +95,8 @@ public class BenchmarkCounters {
         public static final OptionKey<Boolean> BenchmarkCountersDumpDynamic = new OptionKey<>(true);
         @Option(help = "Dump static counters", type = OptionType.Debug)
         public static final OptionKey<Boolean> BenchmarkCountersDumpStatic = new OptionKey<>(false);
+        @Option(help = "file:doc-files/AbortOnBenchmarkCounterOverflowHelp.txt", type = OptionType.Debug)
+        public static final OptionKey<Boolean> AbortOnBenchmarkCounterOverflow = new OptionKey<>(false);
         //@formatter:on
     }
 

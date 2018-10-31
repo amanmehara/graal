@@ -2,23 +2,41 @@
  * Copyright (c) 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api.test.polyglot;
 
@@ -31,12 +49,14 @@ import static com.oracle.truffle.api.test.polyglot.ValueAssert.Trait.NULL;
 import static com.oracle.truffle.api.test.polyglot.ValueAssert.Trait.NUMBER;
 import static com.oracle.truffle.api.test.polyglot.ValueAssert.Trait.PROXY_OBJECT;
 import static com.oracle.truffle.api.test.polyglot.ValueAssert.Trait.STRING;
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -49,28 +69,24 @@ import org.graalvm.polyglot.PolyglotException;
 import org.graalvm.polyglot.PolyglotException.StackFrame;
 import org.graalvm.polyglot.Value;
 import org.graalvm.polyglot.proxy.Proxy;
-import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 
+import com.oracle.truffle.api.CallTarget;
+import com.oracle.truffle.api.Truffle;
+import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.test.polyglot.ValueAssert.Trait;
 
 /**
  * Tests class for {@link Context#asValue(Object)}.
  */
-public class ValueHostConversionTest {
-
-    private Context context;
+public class ValueHostConversionTest extends AbstractPolyglotTest {
 
     @Before
     public void setUp() {
-        context = Context.create();
-    }
-
-    @After
-    public void tearDown() {
-        context.close();
+        setupEnv();
     }
 
     @Test
@@ -184,19 +200,80 @@ public class ValueHostConversionTest {
     @Test
     public void testClassProperties() {
         Value recordClass = context.asValue(JavaRecord.class);
-        assertTrue(recordClass.getMemberKeys().isEmpty());
+        assertFalse(recordClass.getMemberKeys().isEmpty());
         assertTrue(recordClass.canInstantiate());
+        assertTrue(recordClass.getMetaObject().asHostObject() == Class.class);
+
+        Value newInstance = recordClass.newInstance();
+        assertTrue(newInstance.isHostObject());
+        assertTrue(newInstance.asHostObject() instanceof JavaRecord);
+
+        assertTrue(recordClass.hasMember("getName"));
+        assertEquals(JavaRecord.class.getName(), recordClass.getMember("getName").execute().asString());
+        assertTrue(recordClass.hasMember("isInstance"));
+        assertTrue(recordClass.getMember("isInstance").execute(newInstance).asBoolean());
+
+        assertTrue(newInstance.hasMember("getClass"));
+        assertSame(JavaRecord.class, newInstance.getMember("getClass").execute().asHostObject());
+        assertTrue(newInstance.getMember("getClass").execute().newInstance().asHostObject() instanceof JavaRecord);
+        assertEquals(JavaRecord.class.getName(), newInstance.getMember("getClass").execute().getMember("getName").execute().asString());
+        assertTrue(newInstance.getMetaObject().newInstance().asHostObject() instanceof JavaRecord);
+        assertSame(JavaRecord.class, newInstance.getMetaObject().asHostObject());
+
+        assertValue(recordClass, Trait.INSTANTIABLE, Trait.MEMBERS, Trait.HOST_OBJECT);
+    }
+
+    @Test
+    public void testStaticClassProperties() {
+        Value recordClass = getStaticClass(JavaRecord.class);
+        assertTrue(recordClass.canInstantiate());
+        assertTrue(recordClass.getMetaObject().asHostObject() == Class.class);
+        assertFalse(recordClass.hasMember("getName"));
+        assertFalse(recordClass.hasMember("isInstance"));
+
+        assertTrue(recordClass.hasMember("class"));
+        assertSame(JavaRecord.class, recordClass.getMember("class").asHostObject());
+        assertArrayEquals(new String[]{"class"}, recordClass.getMemberKeys().toArray(new String[0]));
 
         Value newInstance = recordClass.newInstance();
         assertTrue(newInstance.isHostObject());
         assertTrue(newInstance.asHostObject() instanceof JavaRecord);
 
         assertTrue(newInstance.hasMember("getClass"));
+        assertSame(JavaRecord.class, newInstance.getMember("getClass").execute().asHostObject());
         assertTrue(newInstance.getMember("getClass").execute().newInstance().asHostObject() instanceof JavaRecord);
         assertTrue(newInstance.getMetaObject().newInstance().asHostObject() instanceof JavaRecord);
-        assertTrue(newInstance.getMetaObject().asHostObject() == JavaRecord.class);
+        assertSame(JavaRecord.class, newInstance.getMetaObject().asHostObject());
 
-        assertValue(context, recordClass, Trait.INSTANTIABLE, Trait.MEMBERS, Trait.HOST_OBJECT);
+        assertValue(recordClass, Trait.INSTANTIABLE, Trait.MEMBERS, Trait.HOST_OBJECT);
+
+        Value bigIntegerStatic = getStaticClass(BigInteger.class);
+        assertTrue(bigIntegerStatic.hasMember("ZERO"));
+        assertTrue(bigIntegerStatic.hasMember("ONE"));
+        Value bigIntegerOne = bigIntegerStatic.getMember("ONE");
+        assertSame(BigInteger.ONE, bigIntegerOne.asHostObject());
+
+        Value bigValue = bigIntegerStatic.newInstance("9000");
+        assertFalse(bigValue.hasMember("ZERO"));
+        assertFalse(bigValue.hasMember("ONE"));
+        Value bigResult = bigValue.getMember("add").execute(bigIntegerOne);
+        Value expectedResult = bigIntegerStatic.getMember("valueOf").execute(9001);
+        assertEquals(0, bigResult.getMember("compareTo").execute(expectedResult).asInt());
+    }
+
+    private Value getStaticClass(Class<?> clazz) {
+        ProxyLanguage.setDelegate(new ProxyLanguage() {
+            @Override
+            protected CallTarget parse(ParsingRequest request) {
+                return Truffle.getRuntime().createCallTarget(new RootNode(languageInstance) {
+                    @Override
+                    public Object execute(VirtualFrame frame) {
+                        return getCurrentContext(ProxyLanguage.class).env.lookupHostSymbol(clazz.getName());
+                    }
+                });
+            }
+        });
+        return context.asValue(context.eval(ProxyLanguage.ID, clazz.getName()));
     }
 
     @Test
@@ -216,8 +293,8 @@ public class ValueHostConversionTest {
         assertTrue(record.hasMember("wait"));
         assertTrue(record.hasMember("notifyAll"));
 
-        assertValue(context, record, Trait.MEMBERS, Trait.HOST_OBJECT);
-        assertValue(context, record.getMetaObject(), Trait.INSTANTIABLE, Trait.MEMBERS, Trait.HOST_OBJECT);
+        assertValue(record, Trait.MEMBERS, Trait.HOST_OBJECT);
+        assertValue(record.getMetaObject(), Trait.INSTANTIABLE, Trait.MEMBERS, Trait.HOST_OBJECT);
     }
 
     @Test
@@ -944,7 +1021,6 @@ public class ValueHostConversionTest {
     public void testIllegalArgumentInt() {
         Value value = context.asValue(new TestIllegalArgumentInt());
 
-        // valid cases
         assertEquals(42, value.getMember("foo").execute(42).asInt());
         assertEquals(42, value.getMember("foo").execute((byte) 42).asInt());
         assertEquals(42, value.getMember("foo").execute((short) 42).asInt());
@@ -952,33 +1028,26 @@ public class ValueHostConversionTest {
         assertEquals(42, value.getMember("foo").execute((float) 42).asInt());
         assertEquals(42, value.getMember("foo").execute((double) 42).asInt());
 
-        // TODO currently broken -> fix
-        // assertHostPolyglotException(() -> value.getMember("foo").execute((Object) null),
-        // NullPointerException.class, "");
-        // assertHostPolyglotException(() -> value.getMember("foo").execute(""),
-        // ClassCastException.class,
-        // "");
-        // assertHostPolyglotException(() -> value.getMember("foo").execute(42.2d),
-        // ClassCastException.class, "");
-        // assertHostPolyglotException(() -> value.getMember("foo").execute(42.2f),
-        // ClassCastException.class, "");
-        // assertHostPolyglotException(() -> value.getMember("foo").execute(Float.NaN),
-        // ClassCastException.class, "");
-        // assertHostPolyglotException(() -> value.getMember("foo").execute(Double.NaN),
-        // ClassCastException.class, "");
+        assertHostPolyglotException(() -> value.getMember("foo").execute((Object) null),
+                        IllegalArgumentException.class);
+        assertHostPolyglotException(() -> value.getMember("foo").execute(""),
+                        IllegalArgumentException.class);
+        assertHostPolyglotException(() -> value.getMember("foo").execute(42.2d),
+                        IllegalArgumentException.class);
+        assertHostPolyglotException(() -> value.getMember("foo").execute(42.2f),
+                        IllegalArgumentException.class);
+        assertHostPolyglotException(() -> value.getMember("foo").execute(Float.NaN),
+                        IllegalArgumentException.class);
+        assertHostPolyglotException(() -> value.getMember("foo").execute(Double.NaN),
+                        IllegalArgumentException.class);
     }
 
-    // private static void assertHostPolyglotException(Runnable r, Class<?> hostExceptionType,
-    // String
-    // message) {
-    // try {
-    // r.run();
-    // } catch (PolyglotException e) {
-    // assertTrue(e.isHostException());
-    // assertTrue(e.asHostException().getClass().getName(),
-    // hostExceptionType.isInstance(e.asHostException()));
-    // assertEquals(message, e.getMessage());
-    // }
-    // }
+    private static void assertHostPolyglotException(Runnable r, Class<?> hostExceptionType) {
+        try {
+            r.run();
+        } catch (Exception e) {
+            assertTrue(e.getClass().getName(), hostExceptionType.isInstance(e));
+        }
+    }
 
 }

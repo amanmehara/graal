@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2012, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -42,7 +44,6 @@ import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.annotate.AutomaticFeature;
 import com.oracle.svm.core.graal.GraalFeature;
 import com.oracle.svm.core.graal.meta.RuntimeConfiguration;
-import com.oracle.svm.core.graal.posix.PosixCEntryPointSnippets;
 import com.oracle.svm.core.graal.stackvalue.StackValueNode;
 import com.oracle.svm.core.graal.stackvalue.StackValueNode.StackSlotIdentity;
 import com.oracle.svm.core.nodes.CFunctionEpilogueNode;
@@ -54,7 +55,7 @@ import com.oracle.svm.core.thread.Safepoint;
 import com.oracle.svm.core.thread.VMThreads;
 
 /**
- * Snippets for calling from Java to C. This is the inverse of {@link PosixCEntryPointSnippets}.
+ * Snippets for calling from Java to C. This is the inverse of {@link CEntryPointSnippets}.
  *
  * The Java frame anchor has to be set up because the top of the stack will no longer be a Java
  * frame.

@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2009, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2009, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -21,8 +23,6 @@
  * questions.
  */
 package org.graalvm.compiler.core.gen;
-
-import jdk.vm.ci.meta.Value;
 
 import org.graalvm.compiler.core.match.MatchableNode;
 import org.graalvm.compiler.graph.Node;
@@ -47,6 +47,8 @@ import org.graalvm.compiler.nodes.calc.IntegerTestNode;
 import org.graalvm.compiler.nodes.calc.LeftShiftNode;
 import org.graalvm.compiler.nodes.calc.MulNode;
 import org.graalvm.compiler.nodes.calc.NarrowNode;
+import org.graalvm.compiler.nodes.calc.NegateNode;
+import org.graalvm.compiler.nodes.calc.NotNode;
 import org.graalvm.compiler.nodes.calc.ObjectEqualsNode;
 import org.graalvm.compiler.nodes.calc.OrNode;
 import org.graalvm.compiler.nodes.calc.PointerEqualsNode;
@@ -62,6 +64,8 @@ import org.graalvm.compiler.nodes.memory.FloatingReadNode;
 import org.graalvm.compiler.nodes.memory.ReadNode;
 import org.graalvm.compiler.nodes.memory.WriteNode;
 
+import jdk.vm.ci.meta.Value;
+
 @MatchableNode(nodeClass = ConstantNode.class, shareable = true)
 @MatchableNode(nodeClass = FloatConvertNode.class, inputs = {"value"})
 @MatchableNode(nodeClass = FloatingReadNode.class, inputs = {"address"})
@@ -76,6 +80,8 @@ import org.graalvm.compiler.nodes.memory.WriteNode;
 @MatchableNode(nodeClass = WriteNode.class, inputs = {"address", "value"})
 @MatchableNode(nodeClass = ZeroExtendNode.class, inputs = {"value"})
 @MatchableNode(nodeClass = AndNode.class, inputs = {"x", "y"}, commutative = true)
+@MatchableNode(nodeClass = NegateNode.class, inputs = {"value"})
+@MatchableNode(nodeClass = NotNode.class, inputs = {"value"})
 @MatchableNode(nodeClass = FloatEqualsNode.class, inputs = {"x", "y"}, commutative = true)
 @MatchableNode(nodeClass = FloatLessThanNode.class, inputs = {"x", "y"}, commutative = true)
 @MatchableNode(nodeClass = PointerEqualsNode.class, inputs = {"x", "y"}, commutative = true)

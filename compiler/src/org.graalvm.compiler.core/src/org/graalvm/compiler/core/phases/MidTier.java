@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,6 +24,9 @@
  */
 package org.graalvm.compiler.core.phases;
 
+import static org.graalvm.compiler.core.common.SpeculativeExecutionAttacksMitigations.GuardTargets;
+import static org.graalvm.compiler.core.common.SpeculativeExecutionAttacksMitigations.NonDeoptGuardTargets;
+import static org.graalvm.compiler.core.common.SpeculativeExecutionAttacksMitigations.Options.MitigateSpeculativeExecutionAttacks;
 import static org.graalvm.compiler.core.common.GraalOptions.ConditionalElimination;
 import static org.graalvm.compiler.core.common.GraalOptions.ImmutableCode;
 import static org.graalvm.compiler.core.common.GraalOptions.OptDeoptimizationGrouping;
@@ -45,6 +50,7 @@ import org.graalvm.compiler.phases.common.FloatingReadPhase;
 import org.graalvm.compiler.phases.common.FrameStateAssignmentPhase;
 import org.graalvm.compiler.phases.common.GuardLoweringPhase;
 import org.graalvm.compiler.phases.common.IncrementalCanonicalizerPhase;
+import org.graalvm.compiler.phases.common.InsertGuardFencesPhase;
 import org.graalvm.compiler.phases.common.IterativeConditionalEliminationPhase;
 import org.graalvm.compiler.phases.common.LockEliminationPhase;
 import org.graalvm.compiler.phases.common.LoopSafepointInsertionPhase;
@@ -75,6 +81,10 @@ public class MidTier extends PhaseSuite<MidTierContext> {
         appendPhase(new LoopSafepointInsertionPhase());
 
         appendPhase(new GuardLoweringPhase());
+
+        if (MitigateSpeculativeExecutionAttacks.getValue(options) == GuardTargets || MitigateSpeculativeExecutionAttacks.getValue(options) == NonDeoptGuardTargets) {
+            appendPhase(new InsertGuardFencesPhase());
+        }
 
         if (VerifyHeapAtReturn.getValue(options)) {
             appendPhase(new VerifyHeapAtReturnPhase());

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -154,7 +156,7 @@ public class GraphEncoder {
         encoder.prepare(graph);
         encoder.finishPrepare();
         int startOffset = encoder.encode(graph);
-        return new EncodedGraph(encoder.getEncoding(), startOffset, encoder.getObjects(), encoder.getNodeClasses(), graph.getAssumptions(), graph.getMethods(), graph.trackNodeSourcePosition());
+        return new EncodedGraph(encoder.getEncoding(), startOffset, encoder.getObjects(), encoder.getNodeClasses(), graph);
     }
 
     public GraphEncoder(Architecture architecture) {
@@ -288,8 +290,7 @@ public class GraphEncoder {
         }
 
         /* Check that the decoding of the encode graph is the same as the input. */
-        assert verifyEncoding(graph, new EncodedGraph(getEncoding(), metadataStart, getObjects(), getNodeClasses(), graph.getAssumptions(), graph.getMethods(), graph.trackNodeSourcePosition()),
-                        architecture);
+        assert verifyEncoding(graph, new EncodedGraph(getEncoding(), metadataStart, getObjects(), getNodeClasses(), graph), architecture);
 
         return metadataStart;
     }
@@ -435,7 +436,12 @@ public class GraphEncoder {
     @SuppressWarnings("try")
     public static boolean verifyEncoding(StructuredGraph originalGraph, EncodedGraph encodedGraph, Architecture architecture) {
         DebugContext debug = originalGraph.getDebug();
-        StructuredGraph decodedGraph = new StructuredGraph.Builder(originalGraph.getOptions(), debug, AllowAssumptions.YES).method(originalGraph.method()).build();
+        // @formatter:off
+        StructuredGraph decodedGraph = new StructuredGraph.Builder(originalGraph.getOptions(), debug, AllowAssumptions.YES).
+                        method(originalGraph.method()).
+                        setIsSubstitution(originalGraph.isSubstitution()).
+                        build();
+        // @formatter:off
         if (originalGraph.trackNodeSourcePosition()) {
             decodedGraph.setTrackNodeSourcePosition();
         }

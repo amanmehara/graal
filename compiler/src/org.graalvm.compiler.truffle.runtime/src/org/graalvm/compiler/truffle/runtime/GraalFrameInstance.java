@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -24,7 +26,6 @@ package org.graalvm.compiler.truffle.runtime;
 
 import java.lang.reflect.Method;
 
-import org.graalvm.compiler.debug.GraalError;
 import org.graalvm.compiler.truffle.runtime.OptimizedOSRLoopNode.OSRRootNode;
 
 import com.oracle.truffle.api.CallTarget;
@@ -55,7 +56,7 @@ public final class GraalFrameInstance implements FrameInstance {
             CALL_TARGET_METHOD = OptimizedCallTarget.class.getDeclaredMethod("callProxy", VirtualFrame.class);
             CALL_OSR_METHOD = OptimizedOSRLoopNode.OSRRootNode.class.getDeclaredMethod("callProxy", OSRRootNode.class, VirtualFrame.class);
         } catch (NoSuchMethodException | SecurityException e) {
-            throw new GraalError(e);
+            throw new InternalError(e);
         }
     }
 

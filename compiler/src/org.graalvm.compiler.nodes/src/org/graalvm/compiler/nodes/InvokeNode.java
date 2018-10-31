@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,7 +24,19 @@
  */
 package org.graalvm.compiler.nodes;
 
-import jdk.vm.ci.meta.JavaKind;
+import static org.graalvm.compiler.nodeinfo.InputType.Extension;
+import static org.graalvm.compiler.nodeinfo.InputType.Memory;
+import static org.graalvm.compiler.nodeinfo.InputType.State;
+import static org.graalvm.compiler.nodeinfo.NodeCycles.CYCLES_2;
+import static org.graalvm.compiler.nodeinfo.NodeCycles.CYCLES_64;
+import static org.graalvm.compiler.nodeinfo.NodeCycles.CYCLES_8;
+import static org.graalvm.compiler.nodeinfo.NodeCycles.CYCLES_UNKNOWN;
+import static org.graalvm.compiler.nodeinfo.NodeSize.SIZE_2;
+import static org.graalvm.compiler.nodeinfo.NodeSize.SIZE_64;
+import static org.graalvm.compiler.nodeinfo.NodeSize.SIZE_8;
+import static org.graalvm.compiler.nodeinfo.NodeSize.SIZE_UNKNOWN;
+
+import java.util.Map;
 
 import org.graalvm.compiler.core.common.type.Stamp;
 import org.graalvm.compiler.graph.Node;
@@ -43,19 +57,7 @@ import org.graalvm.compiler.nodes.spi.UncheckedInterfaceProvider;
 import org.graalvm.compiler.nodes.util.GraphUtil;
 import org.graalvm.word.LocationIdentity;
 
-import java.util.Map;
-
-import static org.graalvm.compiler.nodeinfo.InputType.Extension;
-import static org.graalvm.compiler.nodeinfo.InputType.Memory;
-import static org.graalvm.compiler.nodeinfo.InputType.State;
-import static org.graalvm.compiler.nodeinfo.NodeCycles.CYCLES_2;
-import static org.graalvm.compiler.nodeinfo.NodeCycles.CYCLES_64;
-import static org.graalvm.compiler.nodeinfo.NodeCycles.CYCLES_8;
-import static org.graalvm.compiler.nodeinfo.NodeCycles.CYCLES_UNKNOWN;
-import static org.graalvm.compiler.nodeinfo.NodeSize.SIZE_2;
-import static org.graalvm.compiler.nodeinfo.NodeSize.SIZE_64;
-import static org.graalvm.compiler.nodeinfo.NodeSize.SIZE_8;
-import static org.graalvm.compiler.nodeinfo.NodeSize.SIZE_UNKNOWN;
+import jdk.vm.ci.meta.JavaKind;
 
 /**
  * The {@code InvokeNode} represents all kinds of method calls.
@@ -248,7 +250,10 @@ public final class InvokeNode extends AbstractMemoryCheckpoint implements Invoke
 
     @Override
     public NodeCycles estimatedNodeCycles() {
-        switch (callTarget().invokeKind()) {
+        if (callTarget == null) {
+            return CYCLES_UNKNOWN;
+        }
+        switch (callTarget.invokeKind()) {
             case Interface:
                 return CYCLES_64;
             case Special:
@@ -263,7 +268,10 @@ public final class InvokeNode extends AbstractMemoryCheckpoint implements Invoke
 
     @Override
     public NodeSize estimatedNodeSize() {
-        switch (callTarget().invokeKind()) {
+        if (callTarget == null) {
+            return SIZE_UNKNOWN;
+        }
+        switch (callTarget.invokeKind()) {
             case Interface:
                 return SIZE_64;
             case Special:

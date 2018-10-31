@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -46,6 +46,12 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import com.oracle.truffle.api.frame.FrameSlotKind;
+import org.antlr.v4.runtime.Parser;
+import org.antlr.v4.runtime.Token;
+
+import com.oracle.truffle.api.RootCallTarget;
+import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.frame.FrameDescriptor;
 import com.oracle.truffle.api.frame.FrameSlot;
 import com.oracle.truffle.api.source.Source;
@@ -116,7 +122,7 @@ public class SLNodeFactory {
 
     /* State while parsing a source unit. */
     private final Source source;
-    private final Map<String, SLRootNode> allFunctions;
+    private final Map<String, RootCallTarget> allFunctions;
 
     /* State while parsing a function. */
     private int functionStartPos;
@@ -136,11 +142,11 @@ public class SLNodeFactory {
         this.allFunctions = new HashMap<>();
     }
 
-    public Map<String, SLRootNode> getAllFunctions() {
+    public Map<String, RootCallTarget> getAllFunctions() {
         return allFunctions;
     }
 
-    public void startFunction(Token nameToken, int bodyStartPos) {
+    public void startFunction(Token nameToken, Token bodyStartToken) {
         assert functionStartPos == 0;
         assert functionName == null;
         assert functionBodyStartPos == 0;
@@ -148,9 +154,9 @@ public class SLNodeFactory {
         assert frameDescriptor == null;
         assert lexicalScope == null;
 
-        functionStartPos = nameToken.charPos;
-        functionName = nameToken.val;
-        functionBodyStartPos = bodyStartPos;
+        functionStartPos = nameToken.getStartIndex();
+        functionName = nameToken.getText();
+        functionBodyStartPos = bodyStartToken.getStartIndex();
         frameDescriptor = new FrameDescriptor();
         methodNodes = new ArrayList<>();
         startBlock();
@@ -163,7 +169,7 @@ public class SLNodeFactory {
          * specialized.
          */
         final SLReadArgumentNode readArg = new SLReadArgumentNode(parameterCount);
-        SLExpressionNode assignment = createAssignment(createStringLiteral(nameToken, false), readArg);
+        SLExpressionNode assignment = createAssignment(createStringLiteral(nameToken, false), readArg, parameterCount);
         methodNodes.add(assignment);
         parameterCount++;
     }
@@ -174,15 +180,16 @@ public class SLNodeFactory {
             lexicalScope = lexicalScope.outer;
         } else {
             methodNodes.add(bodyNode);
-            final int bodyEndPos = bodyNode.getSourceSection().getCharEndIndex();
+            final int bodyEndPos = bodyNode.getSourceEndIndex();
             final SourceSection functionSrc = source.createSection(functionStartPos, bodyEndPos - functionStartPos);
             final SLStatementNode methodBlock = finishBlock(methodNodes, functionBodyStartPos, bodyEndPos - functionBodyStartPos);
             assert lexicalScope == null : "Wrong scoping of blocks in parser";
 
             final SLFunctionBodyNode functionBodyNode = new SLFunctionBodyNode(methodBlock);
-            functionBodyNode.setSourceSection(functionSrc);
+            functionBodyNode.setSourceSection(functionSrc.getCharIndex(), functionSrc.getCharLength());
+
             final SLRootNode rootNode = new SLRootNode(language, frameDescriptor, functionBodyNode, functionSrc, functionName);
-            allFunctions.put(functionName, rootNode);
+            allFunctions.put(functionName, Truffle.getRuntime().createCallTarget(rootNode));
         }
 
         functionStartPos = 0;
@@ -207,13 +214,12 @@ public class SLNodeFactory {
         List<SLStatementNode> flattenedNodes = new ArrayList<>(bodyNodes.size());
         flattenBlocks(bodyNodes, flattenedNodes);
         for (SLStatementNode statement : flattenedNodes) {
-            SourceSection sourceSection = statement.getSourceSection();
-            if (sourceSection != null && !isHaltInCondition(statement)) {
+            if (statement.hasSource() && !isHaltInCondition(statement)) {
                 statement.addStatementTag();
             }
         }
         SLBlockNode blockNode = new SLBlockNode(flattenedNodes.toArray(new SLStatementNode[flattenedNodes.size()]));
-        blockNode.setSourceSection(source.createSection(startPos, length));
+        blockNode.setSourceSection(startPos, length);
         return blockNode;
     }
 
@@ -282,10 +288,10 @@ public class SLNodeFactory {
         }
 
         conditionNode.addStatementTag();
-        final int start = whileToken.charPos;
-        final int end = bodyNode.getSourceSection().getCharEndIndex();
+        final int start = whileToken.getStartIndex();
+        final int end = bodyNode.getSourceEndIndex();
         final SLWhileNode whileNode = new SLWhileNode(conditionNode, bodyNode);
-        whileNode.setSourceSection(source.createSection(start, end - start));
+        whileNode.setSourceSection(start, end - start);
         return whileNode;
     }
 
@@ -305,10 +311,10 @@ public class SLNodeFactory {
         }
 
         conditionNode.addStatementTag();
-        final int start = ifToken.charPos;
-        final int end = elsePartNode == null ? thenPartNode.getSourceSection().getCharEndIndex() : elsePartNode.getSourceSection().getCharEndIndex();
+        final int start = ifToken.getStartIndex();
+        final int end = elsePartNode == null ? thenPartNode.getSourceEndIndex() : elsePartNode.getSourceEndIndex();
         final SLIfNode ifNode = new SLIfNode(conditionNode, thenPartNode, elsePartNode);
-        ifNode.setSourceSection(source.createSection(start, end - start));
+        ifNode.setSourceSection(start, end - start);
         return ifNode;
     }
 
@@ -320,10 +326,10 @@ public class SLNodeFactory {
      * @return An SLReturnNode for the given parameters.
      */
     public SLStatementNode createReturn(Token t, SLExpressionNode valueNode) {
-        final int start = t.charPos;
-        final int length = valueNode == null ? t.val.length() : valueNode.getSourceSection().getCharEndIndex() - start;
+        final int start = t.getStartIndex();
+        final int length = valueNode == null ? t.getText().length() : valueNode.getSourceEndIndex() - start;
         final SLReturnNode returnNode = new SLReturnNode(valueNode);
-        returnNode.setSourceSection(source.createSection(start, length));
+        returnNode.setSourceSection(start, length);
         return returnNode;
     }
 
@@ -346,18 +352,16 @@ public class SLNodeFactory {
             leftUnboxed = leftNode;
         } else {
             leftUnboxed = SLUnboxNodeGen.create(leftNode);
-            leftUnboxed.setSourceSection(leftNode.getSourceSection());
         }
         final SLExpressionNode rightUnboxed;
         if (rightNode instanceof SLBinaryNode) {  // SLBinaryNode never returns boxed value
             rightUnboxed = rightNode;
         } else {
             rightUnboxed = SLUnboxNodeGen.create(rightNode);
-            rightUnboxed.setSourceSection(rightNode.getSourceSection());
         }
 
         final SLExpressionNode result;
-        switch (opToken.val) {
+        switch (opToken.getText()) {
             case "+":
                 result = SLAddNodeGen.create(leftUnboxed, rightUnboxed);
                 break;
@@ -395,12 +399,13 @@ public class SLNodeFactory {
                 result = new SLLogicalOrNode(leftUnboxed, rightUnboxed);
                 break;
             default:
-                throw new RuntimeException("unexpected operation: " + opToken.val);
+                throw new RuntimeException("unexpected operation: " + opToken.getText());
         }
 
-        int start = leftUnboxed.getSourceSection().getCharIndex();
-        int length = rightUnboxed.getSourceSection().getCharEndIndex() - start;
-        result.setSourceSection(source.createSection(start, length));
+        int start = leftNode.getSourceCharIndex();
+        int length = rightNode.getSourceEndIndex() - start;
+        result.setSourceSection(start, length);
+        result.addExpressionTag();
 
         return result;
     }
@@ -421,9 +426,10 @@ public class SLNodeFactory {
 
         final SLExpressionNode result = new SLInvokeNode(functionNode, parameterNodes.toArray(new SLExpressionNode[parameterNodes.size()]));
 
-        final int startPos = functionNode.getSourceSection().getCharIndex();
-        final int endPos = finalToken.charPos + finalToken.val.length();
-        result.setSourceSection(source.createSection(startPos, endPos - startPos));
+        final int startPos = functionNode.getSourceCharIndex();
+        final int endPos = finalToken.getStartIndex() + finalToken.getText().length();
+        result.setSourceSection(startPos, endPos - startPos);
+        result.addExpressionTag();
 
         return result;
     }
@@ -436,20 +442,36 @@ public class SLNodeFactory {
      * @return An SLExpressionNode for the given parameters. null if nameNode or valueNode is null.
      */
     public SLExpressionNode createAssignment(SLExpressionNode nameNode, SLExpressionNode valueNode) {
+        return createAssignment(nameNode, valueNode, null);
+    }
+
+    /**
+     * Returns an {@link SLWriteLocalVariableNode} for the given parameters.
+     *
+     * @param nameNode The name of the variable being assigned
+     * @param valueNode The value to be assigned
+     * @param argumentIndex null or index of the argument the assignment is assigning
+     * @return An SLExpressionNode for the given parameters. null if nameNode or valueNode is null.
+     */
+    public SLExpressionNode createAssignment(SLExpressionNode nameNode, SLExpressionNode valueNode, Integer argumentIndex) {
         if (nameNode == null || valueNode == null) {
             return null;
         }
 
         String name = ((SLStringLiteralNode) nameNode).executeGeneric(null);
-        FrameSlot frameSlot = frameDescriptor.findOrAddFrameSlot(name);
+        FrameSlot frameSlot = frameDescriptor.findOrAddFrameSlot(
+                        name,
+                        argumentIndex,
+                        FrameSlotKind.Illegal);
         lexicalScope.locals.put(name, frameSlot);
         final SLExpressionNode result = SLWriteLocalVariableNodeGen.create(valueNode, frameSlot);
 
-        if (valueNode.getSourceSection() != null) {
-            final int start = nameNode.getSourceSection().getCharIndex();
-            final int length = valueNode.getSourceSection().getCharEndIndex() - start;
-            result.setSourceSection(source.createSection(start, length));
+        if (valueNode.hasSource()) {
+            final int start = nameNode.getSourceCharIndex();
+            final int length = valueNode.getSourceEndIndex() - start;
+            result.setSourceSection(start, length);
         }
+        result.addExpressionTag();
 
         return result;
     }
@@ -482,13 +504,14 @@ public class SLNodeFactory {
             /* Read of a global name. In our language, the only global names are functions. */
             result = new SLFunctionLiteralNode(language, name);
         }
-        result.setSourceSection(nameNode.getSourceSection());
+        result.setSourceSection(nameNode.getSourceCharIndex(), nameNode.getSourceLength());
+        result.addExpressionTag();
         return result;
     }
 
     public SLExpressionNode createStringLiteral(Token literalToken, boolean removeQuotes) {
         /* Remove the trailing and ending " */
-        String literal = literalToken.val;
+        String literal = literalToken.getText();
         if (removeQuotes) {
             assert literal.length() >= 2 && literal.startsWith("\"") && literal.endsWith("\"");
             literal = literal.substring(1, literal.length() - 1);
@@ -496,6 +519,7 @@ public class SLNodeFactory {
 
         final SLStringLiteralNode result = new SLStringLiteralNode(literal.intern());
         srcFromToken(result, literalToken);
+        result.addExpressionTag();
         return result;
     }
 
@@ -503,12 +527,13 @@ public class SLNodeFactory {
         SLExpressionNode result;
         try {
             /* Try if the literal is small enough to fit into a long value. */
-            result = new SLLongLiteralNode(Long.parseLong(literalToken.val));
+            result = new SLLongLiteralNode(Long.parseLong(literalToken.getText()));
         } catch (NumberFormatException ex) {
             /* Overflow of long value, so fall back to BigInteger. */
-            result = new SLBigIntegerLiteralNode(new BigInteger(literalToken.val));
+            result = new SLBigIntegerLiteralNode(new BigInteger(literalToken.getText()));
         }
         srcFromToken(result, literalToken);
+        result.addExpressionTag();
         return result;
     }
 
@@ -518,7 +543,7 @@ public class SLNodeFactory {
         }
 
         final SLParenExpressionNode result = new SLParenExpressionNode(expressionNode);
-        result.setSourceSection(source.createSection(start, length));
+        result.setSourceSection(start, length);
         return result;
     }
 
@@ -537,9 +562,10 @@ public class SLNodeFactory {
 
         final SLExpressionNode result = SLReadPropertyNodeGen.create(receiverNode, nameNode);
 
-        final int startPos = receiverNode.getSourceSection().getCharIndex();
-        final int endPos = nameNode.getSourceSection().getCharEndIndex();
-        result.setSourceSection(source.createSection(startPos, endPos - startPos));
+        final int startPos = receiverNode.getSourceCharIndex();
+        final int endPos = nameNode.getSourceEndIndex();
+        result.setSourceSection(startPos, endPos - startPos);
+        result.addExpressionTag();
 
         return result;
     }
@@ -560,9 +586,10 @@ public class SLNodeFactory {
 
         final SLExpressionNode result = SLWritePropertyNodeGen.create(receiverNode, nameNode, valueNode);
 
-        final int start = receiverNode.getSourceSection().getCharIndex();
-        final int length = valueNode.getSourceSection().getCharEndIndex() - start;
-        result.setSourceSection(source.createSection(start, length));
+        final int start = receiverNode.getSourceCharIndex();
+        final int length = valueNode.getSourceEndIndex() - start;
+        result.setSourceSection(start, length);
+        result.addExpressionTag();
 
         return result;
     }
@@ -570,8 +597,8 @@ public class SLNodeFactory {
     /**
      * Creates source description of a single token.
      */
-    private void srcFromToken(SLStatementNode node, Token token) {
-        node.setSourceSection(source.createSection(token.charPos, token.val.length()));
+    private static void srcFromToken(SLStatementNode node, Token token) {
+        node.setSourceSection(token.getStartIndex(), token.getText().length());
     }
 
     /**

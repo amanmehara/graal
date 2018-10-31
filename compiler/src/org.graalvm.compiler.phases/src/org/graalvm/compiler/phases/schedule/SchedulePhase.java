@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -548,7 +550,7 @@ public final class SchedulePhase extends Phase {
                         Block previousCurrentBlock = currentBlock;
                         currentBlock = currentBlock.getDominator();
                         if (previousCurrentBlock.isLoopHeader()) {
-                            if (currentBlock.probability() < latestBlock.probability() || ((StructuredGraph) currentNode.graph()).hasValueProxies()) {
+                            if (currentBlock.getRelativeFrequency() < latestBlock.getRelativeFrequency() || ((StructuredGraph) currentNode.graph()).hasValueProxies()) {
                                 // Only assign new latest block if frequency is actually lower or if
                                 // loop proxies would be required otherwise.
                                 latestBlock = currentBlock;
@@ -565,7 +567,8 @@ public final class SchedulePhase extends Phase {
             if (latestBlock != earliestBlock && currentNode instanceof FloatingReadNode) {
 
                 FloatingReadNode floatingReadNode = (FloatingReadNode) currentNode;
-                if (isImplicitNullOpportunity(floatingReadNode, earliestBlock) && earliestBlock.probability() < latestBlock.probability() * IMPLICIT_NULL_CHECK_OPPORTUNITY_PROBABILITY_FACTOR) {
+                if (isImplicitNullOpportunity(floatingReadNode, earliestBlock) &&
+                                earliestBlock.getRelativeFrequency() < latestBlock.getRelativeFrequency() * IMPLICIT_NULL_CHECK_OPPORTUNITY_PROBABILITY_FACTOR) {
                     latestBlock = earliestBlock;
                 }
             }

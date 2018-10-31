@@ -1,31 +1,48 @@
 /*
- * Copyright (c) 2017, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package org.graalvm.launcher;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -43,18 +60,20 @@ import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Engine;
 import org.graalvm.polyglot.Language;
 import org.graalvm.polyglot.PolyglotException;
+import org.graalvm.polyglot.PolyglotException.StackFrame;
 import org.graalvm.polyglot.Source;
 import org.graalvm.polyglot.Value;
 
 public final class PolyglotLauncher extends Launcher {
 
     private String mainLanguage = null;
+    private boolean verbose;
 
     @Override
     protected void printHelp(OptionCategory maxCategory) {
         Engine engine = Engine.create();
         // @formatter:off
-        System.out.println("GraalVM polyglot launcher version " + engine.getVersion());
+        printVersion(engine);
         System.out.println();
         System.out.println("Usage: polyglot [OPTION]... [FILE] [ARGS]...");
         List<Language> languages = sortedLanguages(engine);
@@ -71,6 +90,7 @@ public final class PolyglotLauncher extends Launcher {
         printOption("--file [<lang>:]FILE",   "Additional file to execute.");
         printOption("--eval [<lang>:]CODE",   "Evaluates code snippets, for example, '--eval js:42'.");
         printOption("--shell",                "Start a multi language shell.");
+        printOption("--verbose",              "Enable verbose stack trace for internal errors.");
         // @formatter:on
     }
 
@@ -85,20 +105,28 @@ public final class PolyglotLauncher extends Launcher {
 
     @Override
     protected void printVersion() {
-        printPolyglotVersions();
+        printVersion(Engine.create());
+    }
+
+    protected static void printVersion(Engine engine) {
+        String engineImplementationName = engine.getImplementationName();
+        if (isAOT()) {
+            engineImplementationName += " Native";
+        }
+        System.out.println(String.format("%s polyglot launcher %s", engineImplementationName, engine.getVersion()));
     }
 
     private void launch(String[] args) {
         List<String> arguments = new ArrayList<>(Arrays.asList(args));
         if (isAOT()) {
             nativeAccess.maybeExec(arguments, true, Collections.emptyMap(), VMType.Native);
-            nativeAccess.setGraalVMProperties();
         }
 
         Map<String, String> options = new HashMap<>();
 
         List<Script> scripts = new ArrayList<>();
         int i = 0;
+        boolean version = false;
         boolean shell = false;
         boolean eval = false;
         boolean file = false;
@@ -140,8 +168,12 @@ public final class PolyglotLauncher extends Launcher {
             } else if (!arg.startsWith("-")) {
                 scripts.add(new FileScript(mainLanguage, arg, true));
                 break;
+            } else if (arg.equals("--version")) {
+                version = true;
             } else if (arg.equals("--shell")) {
                 shell = true;
+            } else if (arg.equals("--verbose")) {
+                verbose = true;
             } else if (arg.equals("--eval")) {
                 eval = true;
             } else if (arg.equals("--file")) {
@@ -161,12 +193,20 @@ public final class PolyglotLauncher extends Launcher {
         if (runPolyglotAction()) {
             return;
         }
-
         Context.Builder contextBuilder = Context.newBuilder().options(options).in(System.in).out(System.out).err(System.err);
-        if (!isAOT()) {
-            contextBuilder.allowHostAccess(true);
+        contextBuilder.allowAllAccess(true);
+        final Path logFile = getLogFile();
+        if (logFile != null) {
+            try {
+                contextBuilder.logHandler(newLogStream(logFile));
+            } catch (IOException ioe) {
+                throw abort(ioe);
+            }
         }
-        contextBuilder.allowCreateThread(true);
+        if (version) {
+            printVersion(Engine.newBuilder().options(options).build());
+            throw exit();
+        }
 
         if (shell) {
             runShell(contextBuilder);
@@ -206,16 +246,16 @@ public final class PolyglotLauncher extends Launcher {
         if (isAOT()) {
             launcherClass = AOT_LAUNCHER_CLASSES.get(launcherName);
             if (launcherClass == null) {
-                throw abort("Could not find launcher '" + launcherName + "'");
+                throw abort("Could not find class '" + launcherName + "'.\nYou might need to rebuild the polyglot launcher.");
             }
         } else {
             launcherClass = getLauncherClass(launcherName);
         }
         try {
-            AbstractLanguageLauncher launcher = launcherClass.newInstance();
+            AbstractLanguageLauncher launcher = launcherClass.getDeclaredConstructor().newInstance();
             launcher.setPolyglot(true);
             launcher.launch(args, options, false);
-        } catch (IllegalAccessException | InstantiationException e) {
+        } catch (Exception e) {
             throw new RuntimeException("Failed to instanciate launcher class " + launcherName, e);
         }
     }
@@ -244,20 +284,52 @@ public final class PolyglotLauncher extends Launcher {
                         System.out.println(result);
                     }
                 } catch (PolyglotException e) {
-                    if (e.isExit()) {
-                        throw exit(e.getExitStatus());
-                    } else if (e.isGuestException()) {
-                        e.printStackTrace();
-                        throw exit(1);
-                    } else {
-                        throw abort(e);
-                    }
+                    throw abort(e);
                 } catch (IOException e) {
                     throw abort(e);
                 } catch (Throwable t) {
                     throw abort(t);
                 }
             }
+        }
+    }
+
+    AbortException abort(PolyglotException e) {
+        if (e.isInternalError()) {
+            System.err.println("Internal error occured: " + e.toString());
+            if (verbose) {
+                e.printStackTrace(System.err);
+            } else {
+                System.err.println("Run with --verbose to see the full stack trace.");
+            }
+            throw exit(1);
+        } else if (e.isExit()) {
+            throw exit(e.getExitStatus());
+        } else if (e.isSyntaxError()) {
+            throw abort(e.getMessage(), 1);
+        } else {
+            List<StackFrame> trace = new ArrayList<>();
+            for (StackFrame stackFrame : e.getPolyglotStackTrace()) {
+                trace.add(stackFrame);
+            }
+            // remove trailing host frames
+            for (int i = trace.size() - 1; i >= 0; i--) {
+                if (trace.get(i).isHostFrame()) {
+                    trace.remove(i);
+                } else {
+                    break;
+                }
+            }
+            if (e.isHostException()) {
+                System.err.println(e.asHostException().toString());
+            } else {
+                System.err.println(e.getMessage());
+            }
+            for (StackFrame stackFrame : trace) {
+                System.err.print("        at ");
+                System.err.println(stackFrame.toString());
+            }
+            throw exit(1);
         }
     }
 
@@ -272,7 +344,16 @@ public final class PolyglotLauncher extends Launcher {
 
     public static void main(String[] args) {
         try {
-            new PolyglotLauncher().launch(args);
+            PolyglotLauncher launcher = new PolyglotLauncher();
+            try {
+                launcher.launch(args);
+            } catch (AbortException e) {
+                throw e;
+            } catch (PolyglotException e) {
+                handlePolyglotException(e);
+            } catch (Throwable t) {
+                throw launcher.abort(t);
+            }
         } catch (AbortException e) {
             handleAbortException(e);
         }

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,6 +24,7 @@
  */
 package com.oracle.svm.core.c;
 
+import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
 import java.util.Arrays;
 
@@ -32,11 +35,16 @@ import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CTypeConversion.CCharPointerHolder;
 import org.graalvm.nativeimage.impl.CTypeConversionSupport;
 import org.graalvm.word.Pointer;
+import org.graalvm.word.PointerBase;
 import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.SubstrateUtil;
+import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.AutomaticFeature;
+import com.oracle.svm.core.annotate.TargetClass;
+import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.core.snippets.KnownIntrinsics;
 
 class CTypeConversionSupportImpl implements CTypeConversionSupport {
 
@@ -68,6 +76,23 @@ class CTypeConversionSupportImpl implements CTypeConversionSupport {
         } else {
             return toJavaStringUnchecked(cString, length);
         }
+    }
+
+    @Override
+    public String toJavaString(CCharPointer cString, UnsignedWord length, Charset charset) {
+        if (cString.isNull()) {
+            return null;
+        } else {
+            return toJavaStringWithCharset(cString, length, charset);
+        }
+    }
+
+    private static String toJavaStringWithCharset(CCharPointer cString, UnsignedWord length, Charset charset) {
+        byte[] bytes = new byte[(int) length.rawValue()];
+        for (int i = 0; i < bytes.length; i++) {
+            bytes[i] = ((Pointer) cString).readByte(i);
+        }
+        return new String(bytes, charset);
     }
 
     private static String toJavaStringUnchecked(CCharPointer cString, UnsignedWord length) {
@@ -110,6 +135,20 @@ class CTypeConversionSupportImpl implements CTypeConversionSupport {
             return NULL_HOLDER;
         }
         return new CCharPointerHolderImpl(javaString);
+    }
+
+    @TargetClass(className = "java.nio.DirectByteBuffer")
+    @SuppressWarnings("unused")
+    static final class Target_java_nio_DirectByteBuffer {
+        @Alias
+        Target_java_nio_DirectByteBuffer(long addr, int cap) {
+        }
+    }
+
+    @Override
+    public ByteBuffer asByteBuffer(PointerBase address, int size) {
+        ByteBuffer byteBuffer = KnownIntrinsics.unsafeCast(new Target_java_nio_DirectByteBuffer(address.rawValue(), size), ByteBuffer.class);
+        return byteBuffer.order(ConfigurationValues.getTarget().arch.getByteOrder());
     }
 }
 

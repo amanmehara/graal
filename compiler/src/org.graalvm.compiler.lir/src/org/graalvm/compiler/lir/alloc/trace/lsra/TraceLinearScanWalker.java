@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -449,14 +451,14 @@ final class TraceLinearScanWalker {
             optimalSplitPos = allocator.getFirstLirInstructionId(maxBlock);
         }
 
-        // minimal block probability
-        double minProbability = maxBlock.probability();
+        // minimal block frequency
+        double minFrequency = maxBlock.getRelativeFrequency();
         for (int i = toBlockNr - 1; i >= fromBlockNr; i--) {
             AbstractBlockBase<?> cur = blockAt(i);
 
-            if (cur.probability() < minProbability) {
-                // Block with lower probability found. Split at the end of this block.
-                minProbability = cur.probability();
+            if (cur.getRelativeFrequency() < minFrequency) {
+                // Block with lower frequency found. Split at the end of this block.
+                minFrequency = cur.getRelativeFrequency();
                 optimalSplitPos = allocator.getLastLirInstructionId(cur) + 2;
             }
         }
@@ -854,16 +856,16 @@ final class TraceLinearScanWalker {
             optimalSplitPos = maxSplitPos;
         }
 
-        // minimal block probability
-        double minProbability = maxBlock.probability();
+        // minimal block frequency
+        double minFrequency = maxBlock.getRelativeFrequency();
         for (int i = toBlockNr - 1; i >= fromBlockNr; i--) {
             AbstractBlockBase<?> cur = blockAt(i);
 
-            if (cur.probability() < minProbability) {
-                // Block with lower probability found. Split at the end of this block.
+            if (cur.getRelativeFrequency() < minFrequency) {
+                // Block with lower frequency found. Split at the end of this block.
                 int opIdBeforeBlockEnd = allocator.getLastLirInstructionId(cur) - 2;
                 if (allocator.getLIR().getLIRforBlock(cur).size() > 2) {
-                    minProbability = cur.probability();
+                    minFrequency = cur.getRelativeFrequency();
                     optimalSplitPos = opIdBeforeBlockEnd;
                 } else {
                     /*

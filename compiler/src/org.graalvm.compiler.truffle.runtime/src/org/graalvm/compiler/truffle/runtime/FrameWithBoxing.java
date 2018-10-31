@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -41,20 +43,26 @@ public final class FrameWithBoxing implements VirtualFrame, MaterializedFrame {
     private final Object[] arguments;
     private Object[] locals;
 
+    private static final Object[] EMPTY_OBJECT_ARRAY = {};
+
     public FrameWithBoxing(FrameDescriptor descriptor, Object[] arguments) {
         this.descriptor = descriptor;
         this.arguments = arguments;
         int size = descriptor.getSize();
-        this.locals = new Object[size];
-        Object defaultValue = descriptor.getDefaultValue();
-        if (defaultValue != null) {
-            Arrays.fill(locals, defaultValue);
+        if (size == 0) {
+            this.locals = EMPTY_OBJECT_ARRAY;
+        } else {
+            this.locals = new Object[size];
+            Object defaultValue = descriptor.getDefaultValue();
+            if (defaultValue != null) {
+                Arrays.fill(locals, defaultValue);
+            }
         }
     }
 
     @Override
     public Object[] getArguments() {
-        return unsafeCast(arguments, Object[].class, true, true);
+        return unsafeCast(arguments, Object[].class, true, true, true);
     }
 
     @Override
@@ -64,7 +72,7 @@ public final class FrameWithBoxing implements VirtualFrame, MaterializedFrame {
 
     @Override
     public Object getObject(FrameSlot slot) {
-        int index = slot.getIndex();
+        int index = getFrameSlotIndex(slot);
         Object[] curLocals = this.getLocals();
         if (CompilerDirectives.inInterpreter() && index >= curLocals.length) {
             curLocals = resizeAndCheck(slot);
@@ -73,12 +81,12 @@ public final class FrameWithBoxing implements VirtualFrame, MaterializedFrame {
     }
 
     private Object[] getLocals() {
-        return unsafeCast(locals, Object[].class, true, true);
+        return unsafeCast(locals, Object[].class, true, true, true);
     }
 
     @Override
     public void setObject(FrameSlot slot, Object value) {
-        int index = slot.getIndex();
+        int index = getFrameSlotIndex(slot);
         Object[] curLocals = this.getLocals();
         if (CompilerDirectives.inInterpreter() && index >= curLocals.length) {
             curLocals = resizeAndCheck(slot);
@@ -172,7 +180,7 @@ public final class FrameWithBoxing implements VirtualFrame, MaterializedFrame {
 
     @Override
     public FrameDescriptor getFrameDescriptor() {
-        return this.descriptor;
+        return unsafeCast(descriptor, FrameDescriptor.class, true, true, false);
     }
 
     private Object[] resizeAndCheck(FrameSlot slot) {
@@ -234,7 +242,13 @@ public final class FrameWithBoxing implements VirtualFrame, MaterializedFrame {
     }
 
     @SuppressWarnings({"unchecked", "unused"})
-    private static <T> T unsafeCast(Object value, Class<T> type, boolean condition, boolean nonNull) {
+    private static <T> T unsafeCast(Object value, Class<T> type, boolean condition, boolean nonNull, boolean exact) {
         return (T) value;
     }
+
+    @SuppressWarnings("deprecation")
+    private static int getFrameSlotIndex(FrameSlot slot) {
+        return slot.getIndex();
+    }
+
 }

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -46,14 +48,15 @@ public final class OptimizedDirectCallNode extends DirectCallNode {
     private boolean inliningForced;
     @CompilationFinal private ValueProfile exceptionProfile;
 
+    private final boolean experimentalSplitting;
+    private final boolean traceSplittingSummary;
     @CompilationFinal private OptimizedCallTarget splitCallTarget;
 
-    private final GraalTruffleRuntime runtime;
-
-    public OptimizedDirectCallNode(GraalTruffleRuntime runtime, OptimizedCallTarget target) {
+    public OptimizedDirectCallNode(OptimizedCallTarget target) {
         super(target);
         assert target.getSourceCallTarget() == null;
-        this.runtime = runtime;
+        this.experimentalSplitting = TruffleRuntimeOptions.getValue(SharedTruffleRuntimeOptions.TruffleExperimentalSplitting);
+        this.traceSplittingSummary = TruffleRuntimeOptions.getValue(SharedTruffleRuntimeOptions.TruffleTraceSplittingSummary);
     }
 
     @Override
@@ -141,7 +144,7 @@ public final class OptimizedDirectCallNode extends DirectCallNode {
         if (calls == 1) {
             getCurrentCallTarget().incrementKnownCallSites();
         }
-        TruffleSplittingStrategy.beforeCall(this, runtime.getTvmci());
+        TruffleSplittingStrategy.beforeCall(this, OptimizedCallTarget.runtime().getTvmci(), traceSplittingSummary, experimentalSplitting);
     }
 
     /** Used by the splitting strategy to install new targets. */
@@ -157,27 +160,33 @@ public final class OptimizedDirectCallNode extends DirectCallNode {
 
             assert isCallTargetCloningAllowed();
             OptimizedCallTarget currentTarget = getCallTarget();
+
             OptimizedCallTarget splitTarget = getCallTarget().cloneUninitialized();
             splitTarget.setCallSiteForSplit(this);
 
             if (callCount >= 1) {
                 currentTarget.decrementKnownCallSites();
+                if (TruffleRuntimeOptions.getValue(SharedTruffleRuntimeOptions.TruffleExperimentalSplitting)) {
+                    currentTarget.removeKnownCallSite(this);
+                }
             }
             splitTarget.incrementKnownCallSites();
+            if (TruffleRuntimeOptions.getValue(SharedTruffleRuntimeOptions.TruffleExperimentalSplitting)) {
+                splitTarget.addKnownCallNode(this);
+            }
 
             if (getParent() != null) {
                 // dummy replace to report the split, irrelevant if this node is not adopted
                 replace(this, "Split call node");
             }
             splitCallTarget = splitTarget;
-            runtime.getListener().onCompilationSplit(this);
+            OptimizedCallTarget.runtime().getListener().onCompilationSplit(this);
         });
     }
 
     @Override
     public boolean cloneCallTarget() {
-        TruffleSplittingStrategy.forceSplitting(this, runtime.getTvmci());
+        TruffleSplittingStrategy.forceSplitting(this, OptimizedCallTarget.runtime().getTvmci(), traceSplittingSummary);
         return true;
     }
-
 }

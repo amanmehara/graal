@@ -24,13 +24,14 @@
  */
 package com.oracle.truffle.tools.profiler.test;
 
-import com.oracle.truffle.tools.profiler.MemoryTracer;
-import com.oracle.truffle.tools.profiler.ProfilerNode;
+import java.util.Collection;
+
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 
-import java.util.Collection;
+import com.oracle.truffle.tools.profiler.MemoryTracer;
+import com.oracle.truffle.tools.profiler.ProfilerNode;
 
 public class MemoryTracerTest extends AbstractProfilerTest {
 
@@ -38,7 +39,7 @@ public class MemoryTracerTest extends AbstractProfilerTest {
 
     @Before
     public void setupTracer() {
-        tracer = MemoryTracer.find(engine);
+        tracer = MemoryTracer.find(context.getEngine());
         Assert.assertNotNull(tracer);
     }
 
@@ -51,7 +52,7 @@ public class MemoryTracerTest extends AbstractProfilerTest {
         Assert.assertTrue(tracer.isCollecting());
         Assert.assertFalse(tracer.hasData());
 
-        execute(defaultSource);
+        eval(defaultSource);
 
         Assert.assertTrue(tracer.isCollecting());
         Assert.assertFalse(tracer.hasData());
@@ -69,7 +70,7 @@ public class MemoryTracerTest extends AbstractProfilerTest {
         Assert.assertTrue(tracer.isCollecting());
         Assert.assertFalse(tracer.hasData());
 
-        execute(defaultRecursiveSource);
+        eval(defaultRecursiveSource);
 
         Assert.assertTrue(tracer.isCollecting());
         Assert.assertFalse(tracer.hasData());
@@ -90,7 +91,7 @@ public class MemoryTracerTest extends AbstractProfilerTest {
         Assert.assertTrue(tracer.isCollecting());
         Assert.assertFalse(tracer.hasData());
 
-        execute(makeSource(oneAllocationSource));
+        eval(makeSource(oneAllocationSource));
 
         Assert.assertTrue(tracer.isCollecting());
         Assert.assertTrue(tracer.hasData());
@@ -122,7 +123,7 @@ public class MemoryTracerTest extends AbstractProfilerTest {
         Assert.assertTrue(tracer.isCollecting());
         Assert.assertFalse(tracer.hasData());
 
-        execute(makeSource(oneAllocationSource));
+        eval(makeSource(oneAllocationSource));
 
         Assert.assertTrue(tracer.isCollecting());
         Assert.assertTrue(tracer.hasData());
@@ -153,7 +154,7 @@ public class MemoryTracerTest extends AbstractProfilerTest {
         Assert.assertTrue(tracer.isCollecting());
         Assert.assertFalse(tracer.hasData());
 
-        execute(makeSource(oneAllocationSource));
+        eval(makeSource(oneAllocationSource));
 
         Assert.assertTrue(tracer.isCollecting());
         Assert.assertTrue(tracer.hasData());
@@ -199,7 +200,7 @@ public class MemoryTracerTest extends AbstractProfilerTest {
         Assert.assertTrue(tracer.isCollecting());
         Assert.assertFalse(tracer.hasData());
 
-        execute(makeSource(oneAllocationSource));
+        eval(makeSource(oneAllocationSource));
 
         Assert.assertTrue(tracer.isCollecting());
         Assert.assertTrue(tracer.hasData());

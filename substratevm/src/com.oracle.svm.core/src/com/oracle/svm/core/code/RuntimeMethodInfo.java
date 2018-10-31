@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -29,10 +31,12 @@ import java.lang.ref.WeakReference;
 import org.graalvm.nativeimage.c.function.CodePointer;
 import org.graalvm.word.UnsignedWord;
 
+import com.oracle.svm.core.annotate.Uninterruptible;
 import com.oracle.svm.core.annotate.UnknownObjectField;
 import com.oracle.svm.core.deopt.SubstrateInstalledCode;
 import com.oracle.svm.core.heap.ObjectReferenceWalker;
 import com.oracle.svm.core.heap.PinnedAllocator;
+import com.oracle.svm.core.os.CommittedMemoryProvider;
 
 import jdk.vm.ci.code.InstalledCode;
 
@@ -99,5 +103,10 @@ public final class RuntimeMethodInfo extends AbstractCodeInfo {
 
     private static WeakReference<SubstrateInstalledCode> createInstalledCodeReference(SubstrateInstalledCode installedCode) {
         return new WeakReference<>(installedCode);
+    }
+
+    @Uninterruptible(reason = "Called from uninterruptible code", mayBeInlined = true)
+    void freeInstalledCode() {
+        CommittedMemoryProvider.get().free(getCodeStart(), getCodeSize(), CommittedMemoryProvider.UNALIGNED, true);
     }
 }

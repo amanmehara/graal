@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -45,6 +45,7 @@ import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.RootCallTarget;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Fallback;
+import com.oracle.truffle.api.dsl.ReportPolymorphism;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.dsl.TypeSystemReference;
 import com.oracle.truffle.api.interop.ArityException;
@@ -62,6 +63,7 @@ import com.oracle.truffle.sl.nodes.interop.SLForeignToSLTypeNodeGen;
 import com.oracle.truffle.sl.runtime.SLFunction;
 import com.oracle.truffle.sl.runtime.SLUndefinedNameException;
 
+@ReportPolymorphism
 @TypeSystemReference(SLTypes.class)
 public abstract class SLDispatchNode extends Node {
 
@@ -149,7 +151,7 @@ public abstract class SLDispatchNode extends Node {
     @Specialization(guards = "isForeignFunction(function)")
     protected Object doForeign(TruffleObject function, Object[] arguments,
                     // The child node to call the foreign function
-                    @Cached("createCrossLanguageCallNode(arguments)") Node crossLanguageCallNode,
+                    @Cached("createCrossLanguageCallNode()") Node crossLanguageCallNode,
                     // The child node to convert the result of the foreign call to a SL value
                     @Cached("createToSLTypeNode()") SLForeignToSLTypeNode toSLTypeNode) {
 
@@ -169,8 +171,8 @@ public abstract class SLDispatchNode extends Node {
         return !(function instanceof SLFunction);
     }
 
-    protected static Node createCrossLanguageCallNode(Object[] arguments) {
-        return Message.createExecute(arguments.length).createNode();
+    protected static Node createCrossLanguageCallNode() {
+        return Message.EXECUTE.createNode();
     }
 
     protected static SLForeignToSLTypeNode createToSLTypeNode() {

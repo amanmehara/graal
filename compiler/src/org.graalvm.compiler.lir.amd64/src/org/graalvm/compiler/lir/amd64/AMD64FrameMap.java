@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -79,15 +81,19 @@ public class AMD64FrameMap extends FrameMap {
     private StackSlot rbpSpillSlot;
 
     public AMD64FrameMap(CodeCacheProvider codeCache, RegisterConfig registerConfig, ReferenceMapBuilderFactory referenceMapFactory) {
+        this(codeCache, registerConfig, referenceMapFactory, false);
+    }
+
+    public AMD64FrameMap(CodeCacheProvider codeCache, RegisterConfig registerConfig, ReferenceMapBuilderFactory referenceMapFactory, boolean useBasePointer) {
         super(codeCache, registerConfig, referenceMapFactory);
         // (negative) offset relative to sp + total frame size
-        initialSpillSize = returnAddressSize();
+        initialSpillSize = returnAddressSize() + (useBasePointer ? getTarget().arch.getWordSize() : 0);
         spillSize = initialSpillSize;
     }
 
     @Override
     public int totalFrameSize() {
-        return frameSize() + returnAddressSize();
+        return frameSize() + initialSpillSize;
     }
 
     @Override

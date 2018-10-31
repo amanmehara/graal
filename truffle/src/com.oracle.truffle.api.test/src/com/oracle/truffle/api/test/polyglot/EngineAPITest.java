@@ -1,24 +1,42 @@
 /*
- * Copyright (c) 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api.test.polyglot;
 
@@ -26,6 +44,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.fail;
 
@@ -42,6 +61,9 @@ import org.graalvm.polyglot.Engine;
 import org.graalvm.polyglot.Language;
 import org.junit.Assert;
 import org.junit.Test;
+
+import com.oracle.truffle.api.Truffle;
+import com.oracle.truffle.api.nodes.RootNode;
 
 public class EngineAPITest {
 
@@ -95,16 +117,9 @@ public class EngineAPITest {
         Assert.assertNotNull(Engine.newBuilder().useSystemProperties(false).build());
     }
 
-    @SuppressWarnings("deprecation")
     @Test
     public void getGetLanguageUnknown() {
         Engine engine = Engine.create();
-
-        try {
-            engine.getLanguage("someUnknownId");
-            fail();
-        } catch (IllegalStateException e) {
-        }
 
         assertNull(engine.getLanguages().get("someUnknownId"));
         assertFalse(engine.getLanguages().containsKey("someUnknownId"));
@@ -113,11 +128,10 @@ public class EngineAPITest {
     }
 
     @Test
-    @SuppressWarnings("deprecation")
     public void getLanguageMeta() {
         Engine engine = Engine.create();
 
-        Language language = engine.getLanguage(EngineAPITestLanguage.ID);
+        Language language = engine.getLanguages().get(EngineAPITestLanguage.ID);
         assertNotNull(language);
         assertEquals(EngineAPITestLanguage.ID, language.getId());
         assertEquals(EngineAPITestLanguage.NAME, language.getName());
@@ -130,11 +144,10 @@ public class EngineAPITest {
     }
 
     @Test
-    @SuppressWarnings("deprecation")
     public void getLanguageOptions() {
         Engine engine = Engine.create();
 
-        Language language = engine.getLanguage(EngineAPITestLanguage.ID);
+        Language language = engine.getLanguages().get(EngineAPITestLanguage.ID);
         OptionDescriptor descriptor1 = language.getOptions().get(EngineAPITestLanguage.Option1_NAME);
         OptionDescriptor descriptor2 = language.getOptions().get(EngineAPITestLanguage.Option2_NAME);
         OptionDescriptor descriptor3 = language.getOptions().get(EngineAPITestLanguage.Option3_NAME);
@@ -180,7 +193,7 @@ public class EngineAPITest {
             // not allowed to access
             Assert.assertTrue(context.initialize(LanguageSPITestLanguage.ID));
             fail();
-        } catch (IllegalStateException e) {
+        } catch (IllegalArgumentException e) {
         }
         context.close();
     }
@@ -196,13 +209,25 @@ public class EngineAPITest {
     @Test
     public void testCreateContextWithAutomaticEngine() {
         Context context = Context.create();
-
         try {
             Context.newBuilder().engine(context.getEngine()).build();
             fail();
         } catch (IllegalArgumentException e) {
 
         }
-
     }
+
+    @Test
+    public void testEngineName() {
+        Engine engine = Engine.create();
+        String implName = engine.getImplementationName();
+        assertEquals(Truffle.getRuntime().getName(), engine.getImplementationName());
+        String name = Truffle.getRuntime().createCallTarget(RootNode.createConstantNode(0)).getClass().getSimpleName();
+        if (name.equals("DefaultCallTarget")) {
+            assertEquals(implName, "Interpreted");
+        } else if (name.endsWith("OptimizedCallTarget")) {
+            assertTrue(implName, implName.equals("GraalVM EE") || implName.equals("GraalVM CE"));
+        }
+    }
+
 }

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -46,7 +48,16 @@ public class VerifyBailoutUsage extends VerifyPhase<PhaseContext> {
 
     static {
         try {
-            AllowedPackagePrefixes = new String[]{getPackageName(PermanentBailoutException.class), "jdk.vm.ci"};
+            AllowedPackagePrefixes = new String[]{
+                            getPackageName(PermanentBailoutException.class),
+                            "jdk.vm.ci",
+
+                            // Allows GraalTruffleRuntime.handleAnnotationFailure to throw
+                            // a BailoutException since the org.graalvm.compiler.truffle.runtime
+                            // project can not see the PermanentBailoutException or
+                            // RetryableBailoutException types.
+                            "org.graalvm.compiler.truffle.runtime"
+            };
         } catch (Throwable t) {
             throw new GraalError(t);
         }

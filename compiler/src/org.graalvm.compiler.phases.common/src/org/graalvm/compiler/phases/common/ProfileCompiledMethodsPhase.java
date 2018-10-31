@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -96,7 +98,7 @@ public class ProfileCompiledMethodsPhase extends Phase {
 
         ControlFlowGraph cfg = ControlFlowGraph.compute(graph, true, true, true, true);
         for (Loop<Block> loop : cfg.getLoops()) {
-            double loopProbability = cfg.blockFor(loop.getHeader().getBeginNode()).probability();
+            double loopProbability = cfg.blockFor(loop.getHeader().getBeginNode()).getRelativeFrequency();
             if (loopProbability > (1D / Integer.MAX_VALUE)) {
                 addSectionCounters(loop.getHeader().getBeginNode(), loop.getBlocks(), loop.getChildren(), graph.getLastSchedule(), cfg);
             }
@@ -124,10 +126,10 @@ public class ProfileCompiledMethodsPhase extends Phase {
         for (Loop<Block> loop : childLoops) {
             blocks.removeAll(loop.getBlocks());
         }
-        double weight = getSectionWeight(schedule, blocks) / cfg.blockFor(start).probability();
-        DynamicCounterNode.addCounterBefore(GROUP_NAME, sectionHead(start), (long) weight, true, start.next());
+        long increment = DynamicCounterNode.clampIncrement((long) (getSectionWeight(schedule, blocks) / cfg.blockFor(start).getRelativeFrequency()));
+        DynamicCounterNode.addCounterBefore(GROUP_NAME, sectionHead(start), increment, true, start.next());
         if (WITH_INVOKE_FREE_SECTIONS && !hasInvoke(blocks)) {
-            DynamicCounterNode.addCounterBefore(GROUP_NAME_WITHOUT, sectionHead(start), (long) weight, true, start.next());
+            DynamicCounterNode.addCounterBefore(GROUP_NAME_WITHOUT, sectionHead(start), increment, true, start.next());
         }
     }
 
@@ -142,7 +144,7 @@ public class ProfileCompiledMethodsPhase extends Phase {
     private static double getSectionWeight(ScheduleResult schedule, Collection<Block> blocks) {
         double count = 0;
         for (Block block : blocks) {
-            double blockProbability = block.probability();
+            double blockProbability = block.getRelativeFrequency();
             for (Node node : schedule.getBlockToNodesMap().get(block)) {
                 count += blockProbability * getNodeWeight(node);
             }

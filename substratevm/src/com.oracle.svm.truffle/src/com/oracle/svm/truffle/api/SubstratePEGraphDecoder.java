@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -27,6 +29,7 @@ import static com.oracle.svm.core.util.VMError.shouldNotReachHere;
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.compiler.bytecode.BytecodeProvider;
 import org.graalvm.compiler.core.common.spi.ConstantFieldProvider;
+import org.graalvm.compiler.graph.SourceLanguagePositionProvider;
 import org.graalvm.compiler.nodes.EncodedGraph;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.graphbuilderconf.InlineInvokePlugin;
@@ -51,13 +54,15 @@ public class SubstratePEGraphDecoder extends PEGraphDecoder {
 
     public SubstratePEGraphDecoder(Architecture architecture, StructuredGraph graph, MetaAccessProvider metaAccess, ConstantReflectionProvider constantReflection,
                     ConstantFieldProvider constantFieldProvider, StampProvider stampProvider, LoopExplosionPlugin loopExplosionPlugin, InvocationPlugins invocationPlugins,
-                    InlineInvokePlugin[] inlineInvokePlugins, ParameterPlugin parameterPlugin, NodePlugin[] nodePlugins, ResolvedJavaMethod callInlinedMethod) {
+                    InlineInvokePlugin[] inlineInvokePlugins, ParameterPlugin parameterPlugin, NodePlugin[] nodePlugins, ResolvedJavaMethod callInlinedMethod,
+                    SourceLanguagePositionProvider sourceLanguagePosition) {
         super(architecture, graph, metaAccess, constantReflection, constantFieldProvider, stampProvider, loopExplosionPlugin, invocationPlugins, inlineInvokePlugins, parameterPlugin, nodePlugins,
-                        callInlinedMethod);
+                        callInlinedMethod, sourceLanguagePosition);
     }
 
     @Override
-    protected EncodedGraph lookupEncodedGraph(ResolvedJavaMethod method, ResolvedJavaMethod originalMethod, BytecodeProvider intrinsicBytecodeProvider, boolean trackNodeSourcePosition) {
+    protected EncodedGraph lookupEncodedGraph(ResolvedJavaMethod method, ResolvedJavaMethod originalMethod, BytecodeProvider intrinsicBytecodeProvider,
+                    boolean isSubstitution, boolean trackNodeSourcePosition) {
         /*
          * The EncodedGraph instance also serves as a cache for some information during decoding,
          * e.g., the start offsets of encoded nodes. So it is beneficial to have a cache of the

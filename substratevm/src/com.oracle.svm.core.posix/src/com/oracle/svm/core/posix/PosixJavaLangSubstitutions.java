@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -52,15 +54,17 @@ import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.LibCHelper;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.Delete;
 import com.oracle.svm.core.annotate.InjectAccessors;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
+import com.oracle.svm.core.annotate.TargetElement;
 import com.oracle.svm.core.annotate.Uninterruptible;
 import com.oracle.svm.core.heap.NoAllocationVerifier;
+import com.oracle.svm.core.jdk.JDK8OrEarlier;
+import com.oracle.svm.core.jdk.JDK9OrLater;
 import com.oracle.svm.core.posix.headers.Dirent;
 import com.oracle.svm.core.posix.headers.Dirent.DIR;
 import com.oracle.svm.core.posix.headers.Dirent.dirent;
@@ -156,11 +160,11 @@ final class Target_java_lang_ProcessEnvironment {
                 int valLength = (int) LibC.strlen(valBeg).rawValue();
 
                 byte[] var = new byte[varLength];
-                SubstrateUtil.wrapAsByteBuffer(varBeg, varLength).get(var);
+                CTypeConversion.asByteBuffer(varBeg, varLength).get(var);
                 result[2 * j] = var;
 
                 byte[] val = new byte[valLength];
-                SubstrateUtil.wrapAsByteBuffer(valBeg, valLength).get(val);
+                CTypeConversion.asByteBuffer(valBeg, valLength).get(val);
                 result[2 * j + 1] = val;
 
                 j++;
@@ -173,6 +177,7 @@ final class Target_java_lang_ProcessEnvironment {
 }
 
 @TargetClass(className = "java.lang.ProcessEnvironment", innerClass = "StringEnvironment")
+@Platforms({Platform.LINUX.class, Platform.DARWIN.class})
 final class Target_java_lang_ProcessEnvironment_StringEnvironment {
     @Alias
     @SuppressWarnings("unused")
@@ -185,18 +190,21 @@ final class Target_java_lang_ProcessEnvironment_StringEnvironment {
 }
 
 @TargetClass(className = "java.lang.ProcessEnvironment", innerClass = "Variable")
+@Platforms({Platform.LINUX.class, Platform.DARWIN.class})
 final class Target_java_lang_ProcessEnvironment_Variable {
     @Alias
     public static native Target_java_lang_ProcessEnvironment_Variable valueOf(byte[] bytes);
 }
 
 @TargetClass(className = "java.lang.ProcessEnvironment", innerClass = "Value")
+@Platforms({Platform.LINUX.class, Platform.DARWIN.class})
 final class Target_java_lang_ProcessEnvironment_Value {
     @Alias
     public static native Target_java_lang_ProcessEnvironment_Value valueOf(byte[] bytes);
 }
 
-@TargetClass(className = "java.lang.UNIXProcess")
+@TargetClass(className = "java.lang.UNIXProcess", onlyWith = JDK8OrEarlier.class)
+@Platforms({Platform.LINUX.class, Platform.DARWIN.class})
 final class Target_java_lang_UNIXProcess {
 
     // The reaper thread pool and thread groups (currently) confuse the analysis, so we launch
@@ -349,7 +357,8 @@ final class Target_java_lang_UNIXProcess {
                 int status = waitForProcessExit(pid);
                 // Checkstyle: stop
                 // We need to use synchronized to synchronize with non-substituted UNIXProcess code
-                synchronized (Target_java_lang_UNIXProcess.this) { // Checkstyle: resume
+                synchronized (Target_java_lang_UNIXProcess.this) {
+                    // Checkstyle: resume
                     Target_java_lang_UNIXProcess.this.exitcode = status;
                     Target_java_lang_UNIXProcess.this.hasExited = true;
                     Target_java_lang_UNIXProcess.this.notifyAll();
@@ -374,7 +383,7 @@ final class Target_java_lang_UNIXProcess {
     @Substitute
     @SuppressWarnings({"static-method"})
     int waitForProcessExit(int ppid) {
-        CIntPointer statusptr = StackValue.get(SizeOf.get(CIntPointer.class));
+        CIntPointer statusptr = StackValue.get(CIntPointer.class);
         while (Wait.waitpid(ppid, statusptr, 0) < 0) {
             if (Errno.errno() == Errno.ECHILD()) {
                 return 0;
@@ -400,6 +409,36 @@ final class Target_java_lang_UNIXProcess {
     }
 }
 
+@TargetClass(className = "java.lang.ProcessImpl")
+@Platforms({Platform.LINUX.class, Platform.DARWIN.class})
+final class Target_java_lang_ProcessImpl {
+
+    @Substitute //
+    @TargetElement(onlyWith = JDK9OrLater.class) //
+    @SuppressWarnings({"unused", "static-method"})
+    private /* native */ int forkAndExec(
+                    int mode,
+                    byte[] helperpath,
+                    byte[] prog,
+                    byte[] argBlock,
+                    int argc,
+                    byte[] envBlock,
+                    int envc,
+                    byte[] dir,
+                    int[] fds,
+                    boolean redirectErrorStream)
+                    throws IOException {
+        throw VMError.unsupportedFeature("JDK9OrLater: Target_java_lang_ProcessImpl.forkAndExec");
+    }
+
+    @Substitute //
+    @TargetElement(onlyWith = JDK9OrLater.class) //
+    private static /* native */ void init() {
+        throw VMError.unsupportedFeature("JDK9OrLater: Target_java_lang_ProcessImpl.init");
+    }
+}
+
+@Platforms({Platform.LINUX.class, Platform.DARWIN.class})
 final class Java_lang_UNIXProcess_Supplement {
 
     static final ThreadFactory reaperFactory = new ThreadFactory() {
@@ -494,10 +533,10 @@ final class Java_lang_UNIXProcess_Supplement {
                     return gotoFinally;
                 }
                 dirent dirent = WordFactory.pointer(buffer.rawValue());
-                direntPointer direntptr = StackValue.get(SizeOf.get(direntPointer.class));
+                direntPointer direntptr = StackValue.get(direntPointer.class);
                 int status;
                 while ((status = Dirent.readdir_r_no_transition(fddir, dirent, direntptr)) == 0 && direntptr.read().isNonNull()) {
-                    CCharPointerPointer endptr = StackValue.get(SizeOf.get(CCharPointerPointer.class));
+                    CCharPointerPointer endptr = StackValue.get(CCharPointerPointer.class);
                     long fd = LibC.strtol(dirent.d_name(), endptr, 10);
                     if (fd > maxFd && endptr.read().isNonNull() && endptr.read().read() == '\0') {
                         UnistdNoTransitions.close((int) fd);
@@ -529,7 +568,7 @@ final class Java_lang_UNIXProcess_Supplement {
                 final int fileStrlen = (int) LibC.strlen(file).rawValue();
                 int stickyErrno = 0;
 
-                final CCharPointerPointer saveptr = StackValue.get(SizeOf.get(CCharPointerPointer.class));
+                final CCharPointerPointer saveptr = StackValue.get(CCharPointerPointer.class);
                 saveptr.write(WordFactory.nullPointer());
                 CCharPointer searchDir = LibC.strtok_r(searchPaths, searchPathSeparator, saveptr);
                 while (searchDir.isNonNull()) {
@@ -657,7 +696,8 @@ final class Java_lang_UNIXProcess_Supplement {
     }
 }
 
-@TargetClass(className = "java.lang.UNIXProcess", innerClass = "ProcessPipeInputStream")
+@TargetClass(className = "java.lang.UNIXProcess", innerClass = "ProcessPipeInputStream", onlyWith = JDK8OrEarlier.class)
+@Platforms({Platform.LINUX.class, Platform.DARWIN.class})
 final class Target_java_lang_UNIXProcess_ProcessPipeInputStream {
     @Alias
     Target_java_lang_UNIXProcess_ProcessPipeInputStream(@SuppressWarnings("unused") int fd) {
@@ -667,7 +707,8 @@ final class Target_java_lang_UNIXProcess_ProcessPipeInputStream {
     native void processExited();
 }
 
-@TargetClass(className = "java.lang.UNIXProcess", innerClass = "ProcessPipeOutputStream")
+@TargetClass(className = "java.lang.UNIXProcess", innerClass = "ProcessPipeOutputStream", onlyWith = JDK8OrEarlier.class)
+@Platforms({Platform.LINUX.class, Platform.DARWIN.class})
 final class Target_java_lang_UNIXProcess_ProcessPipeOutputStream {
     @Alias
     Target_java_lang_UNIXProcess_ProcessPipeOutputStream(@SuppressWarnings("unused") int fd) {
@@ -678,11 +719,13 @@ final class Target_java_lang_UNIXProcess_ProcessPipeOutputStream {
 }
 
 @TargetClass(className = "java.lang.ProcessBuilder", innerClass = "NullInputStream")
+@Platforms({Platform.LINUX.class, Platform.DARWIN.class})
 final class Target_java_lang_ProcessBuilder_NullInputStream {
     @Alias static final Target_java_lang_ProcessBuilder_NullInputStream INSTANCE = null;
 }
 
 @TargetClass(className = "java.lang.ProcessBuilder", innerClass = "NullOutputStream")
+@Platforms({Platform.LINUX.class, Platform.DARWIN.class})
 final class Target_java_lang_ProcessBuilder_NullOutputStream {
     @Alias static final Target_java_lang_ProcessBuilder_NullOutputStream INSTANCE = null;
 }
@@ -697,14 +740,25 @@ final class Target_java_lang_System {
     @Substitute
     @Uninterruptible(reason = "Called from uninterruptible code.")
     public static long currentTimeMillis() {
-        timeval timeval = StackValue.get(SizeOf.get(timeval.class));
+        timeval timeval = StackValue.get(timeval.class);
         timezone timezone = WordFactory.nullPointer();
         gettimeofday(timeval, timezone);
         return timeval.tv_sec() * 1_000L + timeval.tv_usec() / 1_000L;
     }
 }
 
+@TargetClass(className = "java.lang.Shutdown")
+@Platforms({Platform.LINUX.class, Platform.DARWIN.class})
+final class Target_java_lang_Shutdown {
+
+    @Substitute
+    static void halt0(int status) {
+        LibC.exit(status);
+    }
+}
+
 @TargetClass(java.lang.Runtime.class)
+@Platforms({Platform.LINUX.class, Platform.DARWIN.class})
 @SuppressWarnings({"static-method"})
 final class Target_java_lang_Runtime {
 
@@ -719,6 +773,7 @@ final class Target_java_lang_Runtime {
 }
 
 /** Dummy class to have a class with the file's name. */
+@Platforms({Platform.LINUX.class, Platform.DARWIN.class})
 public final class PosixJavaLangSubstitutions {
 
     /** Private constructor: No instances. */

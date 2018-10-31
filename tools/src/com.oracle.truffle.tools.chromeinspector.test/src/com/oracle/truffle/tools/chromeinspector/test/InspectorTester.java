@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,19 +24,26 @@
  */
 package com.oracle.truffle.tools.chromeinspector.test;
 
+import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Future;
 import java.util.concurrent.Semaphore;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.fail;
 
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Engine;
+import org.graalvm.polyglot.Instrument;
 import org.graalvm.polyglot.Source;
 import org.graalvm.polyglot.Value;
+import org.graalvm.polyglot.io.MessageEndpoint;
 
 import com.oracle.truffle.tools.chromeinspector.TruffleExecutionContext;
+import com.oracle.truffle.tools.chromeinspector.server.ConnectionWatcher;
 import com.oracle.truffle.tools.chromeinspector.server.InspectServerSession;
+import com.oracle.truffle.tools.chromeinspector.types.ExceptionDetails;
 import com.oracle.truffle.tools.chromeinspector.types.RemoteObject;
 
 public final class InspectorTester {
@@ -48,22 +55,42 @@ public final class InspectorTester {
     }
 
     public static InspectorTester start(boolean suspend) throws InterruptedException {
+        return start(suspend, false, false);
+    }
+
+    public static InspectorTester start(boolean suspend, final boolean inspectInternal, final boolean inspectInitialization) throws InterruptedException {
         RemoteObject.resetIDs();
+        ExceptionDetails.resetIDs();
         TruffleExecutionContext.resetIDs();
-        InspectExecThread exec = new InspectExecThread(suspend);
+        InspectExecThread exec = new InspectExecThread(suspend, inspectInternal, inspectInitialization);
         exec.start();
         exec.initialized.acquire();
         return new InspectorTester(exec);
     }
 
     public void finish() throws InterruptedException {
-        synchronized (exec) {
+        finish(false);
+    }
+
+    public Throwable finishErr() throws InterruptedException {
+        return finish(true);
+    }
+
+    private Throwable finish(boolean expectError) throws InterruptedException {
+        synchronized (exec.lock) {
             exec.done = true;
-            exec.notifyAll();
+            exec.catchError = expectError;
+            exec.lock.notifyAll();
         }
         exec.join();
         RemoteObject.resetIDs();
+        ExceptionDetails.resetIDs();
         TruffleExecutionContext.resetIDs();
+        return exec.error;
+    }
+
+    public boolean shouldWaitForClose() {
+        return exec.connectionWatcher.shouldWaitForClose();
     }
 
     public long getContextId() {
@@ -75,7 +102,7 @@ public final class InspectorTester {
     }
 
     public void sendMessage(String message) {
-        exec.inspect.onMessage(message);
+        exec.inspect.sendText(message);
     }
 
     public String getMessages(boolean waitForSome) throws InterruptedException {
@@ -124,37 +151,94 @@ public final class InspectorTester {
         return true;
     }
 
-    private static class InspectExecThread extends Thread implements InspectServerSession.MessageListener {
+    public String receiveMessages(String... messageParts) throws InterruptedException {
+        int part = 0;
+        int pos = 0;
+        StringBuilder allMessages = new StringBuilder();
+        synchronized (exec.receivedMessages) {
+            do {
+                String messages;
+                do {
+                    messages = exec.receivedMessages.toString();
+                    if (messages.isEmpty()) {
+                        exec.receivedMessages.wait();
+                    } else {
+                        break;
+                    }
+                } while (true);
+                allMessages.append(messages);
+                if (part == 0) {
+                    int l = messageParts[0].length();
+                    if (allMessages.length() < l) {
+                        continue;
+                    }
+                    assertEquals(messageParts[0], allMessages.substring(0, l));
+                    pos = l;
+                    part++;
+                }
+                while (part < messageParts.length) {
+                    int index = allMessages.indexOf(messageParts[part], pos);
+                    if (index >= pos) {
+                        pos = index + messageParts[part].length();
+                        part++;
+                    } else {
+                        break;
+                    }
+                }
+                if (part < messageParts.length) {
+                    continue;
+                }
+                int end = pos - allMessages.length() + messages.length();
+                exec.receivedMessages.delete(0, end);
+                allMessages.delete(pos, allMessages.length());
+                break;
+            } while (exec.receivedMessages.delete(0, exec.receivedMessages.length()) != null);
+        }
+        return allMessages.toString();
+    }
+
+    private static class InspectExecThread extends Thread implements MessageEndpoint {
 
         private final boolean suspend;
+        private boolean inspectInternal = false;
+        private boolean inspectInitialization = false;
         private Context context;
         private InspectServerSession inspect;
+        private ConnectionWatcher connectionWatcher;
         private long contextId;
         private Source evalSource;
         private CompletableFuture<Value> evalValue;
         private boolean done = false;
         private final StringBuilder receivedMessages = new StringBuilder();
         private final Semaphore initialized = new Semaphore(0);
+        private boolean catchError;
+        private Throwable error;
+        final Object lock = new Object();
 
-        InspectExecThread(boolean suspend) {
+        InspectExecThread(boolean suspend, final boolean inspectInternal, final boolean inspectInitialization) {
             super("Inspector Executor");
             this.suspend = suspend;
+            this.inspectInternal = inspectInternal;
+            this.inspectInitialization = inspectInitialization;
         }
 
         @Override
         public void run() {
             Engine engine = Engine.create();
-            InspectorTestInstrument.suspend = suspend;
-            inspect = engine.getInstruments().get(InspectorTestInstrument.ID).lookup(InspectServerSession.class);
+            Instrument testInstrument = engine.getInstruments().get(InspectorTestInstrument.ID);
+            InspectSessionInfoProvider sessionInfoProvider = testInstrument.lookup(InspectSessionInfoProvider.class);
+            InspectSessionInfo sessionInfo = sessionInfoProvider.getSessionInfo(suspend, inspectInternal, inspectInitialization);
+            inspect = sessionInfo.getInspectServerSession();
             try {
-                contextId = engine.getInstruments().get(InspectorTestInstrument.ID).lookup(Long.class);
+                connectionWatcher = sessionInfo.getConnectionWatcher();
+                contextId = sessionInfo.getId();
                 inspect.setMessageListener(this);
-                context = Context.newBuilder().engine(engine).build();
+                context = Context.newBuilder().engine(engine).allowAllAccess(true).build();
                 initialized.release();
                 Source source = null;
                 CompletableFuture<Value> valueFuture = null;
                 do {
-                    synchronized (this) {
+                    synchronized (lock) {
                         if (evalSource != null) {
                             source = evalSource;
                             valueFuture = evalValue;
@@ -163,9 +247,11 @@ public final class InspectorTester {
                         } else {
                             source = null;
                             valueFuture = null;
-                            try {
-                                wait();
-                            } catch (InterruptedException ex) {
+                            if (!done) {
+                                try {
+                                    lock.wait();
+                                } catch (InterruptedException ex) {
+                                }
                             }
                         }
                     }
@@ -174,28 +260,53 @@ public final class InspectorTester {
                         valueFuture.complete(value);
                     }
                 } while (!done);
+            } catch (ThreadDeath td) {
+                throw td;
+            } catch (Throwable t) {
+                if (catchError) {
+                    error = t;
+                } else {
+                    throw t;
+                }
             } finally {
-                inspect.dispose();
+                inspect.sendClose();
             }
         }
 
         private Future<Value> eval(Source source) {
             Future<Value> valueFuture;
-            synchronized (this) {
+            synchronized (lock) {
                 evalSource = source;
                 valueFuture = evalValue = new CompletableFuture<>();
-                notifyAll();
+                lock.notifyAll();
             }
             return valueFuture;
         }
 
         @Override
-        public void sendMessage(String message) {
+        public void sendText(String message) {
             synchronized (receivedMessages) {
                 receivedMessages.append(message);
                 receivedMessages.append('\n');
                 receivedMessages.notifyAll();
             }
+        }
+
+        @Override
+        public void sendBinary(ByteBuffer data) throws IOException {
+            fail("Unexpected binary message");
+        }
+
+        @Override
+        public void sendPing(ByteBuffer data) throws IOException {
+        }
+
+        @Override
+        public void sendPong(ByteBuffer data) throws IOException {
+        }
+
+        @Override
+        public void sendClose() throws IOException {
         }
 
     }

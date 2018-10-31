@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -59,21 +61,29 @@ public class JTTTest extends GraalCompilerTest {
         return argsToBind;
     }
 
-    Double delta;
+    /**
+     * If non-null, then this is a test for a method returning a {@code double} value that must be
+     * within {@code ulpDelta}s of the expected value.
+     */
+    protected Double ulpDelta;
 
     @Override
     protected void assertDeepEquals(Object expected, Object actual) {
-        if (delta != null) {
-            Assert.assertEquals(((Number) expected).doubleValue(), ((Number) actual).doubleValue(), delta);
+        if (ulpDelta != null) {
+            double expectedDouble = (double) expected;
+            double actualDouble = (Double) actual;
+            double ulp = Math.ulp(expectedDouble);
+            double delta = ulpDelta * ulp;
+            try {
+                Assert.assertEquals(expectedDouble, actualDouble, delta);
+            } catch (AssertionError e) {
+                double diff = Math.abs(expectedDouble - actualDouble);
+                double diffUlps = diff / ulp;
+                throw new AssertionError(e.getMessage() + " // " + diffUlps + " ulps");
+            }
         } else {
             super.assertDeepEquals(expected, actual);
         }
-    }
-
-    @SuppressWarnings("hiding")
-    protected void runTestWithDelta(double delta, String name, Object... args) {
-        this.delta = Double.valueOf(delta);
-        runTest(name, args);
     }
 
     protected void runTest(String name, Object... args) {

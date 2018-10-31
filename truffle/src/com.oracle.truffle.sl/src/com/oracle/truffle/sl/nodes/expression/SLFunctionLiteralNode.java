@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -82,7 +82,6 @@ public final class SLFunctionLiteralNode extends SLExpressionNode {
     @Override
     public SLFunction executeGeneric(VirtualFrame frame) {
         if (cachedFunction == null) {
-            CompilerDirectives.transferToInterpreterAndInvalidate();
             /* We are about to change a @CompilationFinal field. */
             CompilerDirectives.transferToInterpreterAndInvalidate();
             /* First execution of the node: lookup the function in the function registry. */

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -44,6 +46,7 @@ import com.oracle.graal.pointsto.meta.AnalysisUniverse;
 import com.oracle.svm.core.graal.nodes.SubstrateFieldLocationIdentity;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.meta.ReadableJavaField;
+import com.oracle.svm.core.util.HostedStringDeduplication;
 import com.oracle.svm.core.util.Replaced;
 import com.oracle.svm.graal.GraalSupport;
 import com.oracle.svm.graal.SubstrateGraalRuntime;
@@ -54,7 +57,6 @@ import com.oracle.svm.graal.meta.SubstrateMetaAccess;
 import com.oracle.svm.graal.meta.SubstrateMethod;
 import com.oracle.svm.graal.meta.SubstrateSignature;
 import com.oracle.svm.graal.meta.SubstrateType;
-import com.oracle.svm.graal.meta.UniqueStringTable;
 import com.oracle.svm.hosted.SVMHost;
 import com.oracle.svm.hosted.ameta.AnalysisConstantFieldProvider;
 import com.oracle.svm.hosted.ameta.AnalysisConstantReflectionProvider;
@@ -91,13 +93,13 @@ public class GraalObjectReplacer implements Function<Object, Object> {
     private final SubstrateConstantFieldProvider sConstantFieldProvider;
     private SubstrateGraalRuntime sGraalRuntime;
 
-    private final UniqueStringTable stringTable;
+    private final HostedStringDeduplication stringTable;
 
     public GraalObjectReplacer(AnalysisUniverse aUniverse, AnalysisMetaAccess aMetaAccess) {
         this.aUniverse = aUniverse;
         this.aMetaAccess = aMetaAccess;
         this.sMetaAccess = new SubstrateMetaAccess();
-        this.stringTable = new UniqueStringTable();
+        this.stringTable = HostedStringDeduplication.singleton();
         this.sConstantReflectionProvider = new SubstrateConstantReflectionProvider(sMetaAccess);
         this.sConstantFieldProvider = new SubstrateConstantFieldProvider(aMetaAccess);
     }
@@ -261,17 +263,16 @@ public class GraalObjectReplacer implements Function<Object, Object> {
         return fields.remove(field) != null;
     }
 
+    public boolean typeCreated(JavaType original) {
+        return types.containsKey(toAnalysisType(original));
+    }
+
     public SubstrateType createType(JavaType original) {
         if (original == null) {
             return null;
         }
 
-        AnalysisType aType;
-        if (original instanceof AnalysisType) {
-            aType = (AnalysisType) original;
-        } else {
-            aType = ((HostedType) original).getWrapped();
-        }
+        AnalysisType aType = toAnalysisType(original);
         SubstrateType sType = types.get(aType);
 
         if (sType == null) {
@@ -281,7 +282,7 @@ public class GraalObjectReplacer implements Function<Object, Object> {
             types.put(aType, sType);
             hub.setMetaType(sType);
 
-            sType.setInstanceFields(createFields(aType));
+            sType.setRawAllInstanceFields(createAllInstanceFields(aType));
             createType(aType.getSuperclass());
             createType(aType.getComponentType());
             for (AnalysisType aInterface : aType.getInterfaces()) {
@@ -291,8 +292,16 @@ public class GraalObjectReplacer implements Function<Object, Object> {
         return sType;
     }
 
-    private SubstrateField[] createFields(ResolvedJavaType originalType) {
-        ResolvedJavaField[] originalFields = originalType.getInstanceFields(false);
+    private static AnalysisType toAnalysisType(JavaType original) {
+        if (original instanceof HostedType) {
+            return ((HostedType) original).getWrapped();
+        } else {
+            return (AnalysisType) original;
+        }
+    }
+
+    private SubstrateField[] createAllInstanceFields(ResolvedJavaType originalType) {
+        ResolvedJavaField[] originalFields = originalType.getInstanceFields(true);
         SubstrateField[] sFields = new SubstrateField[originalFields.length];
         for (int idx = 0; idx < originalFields.length; idx++) {
             sFields[idx] = createField(originalFields[idx]);
@@ -384,8 +393,7 @@ public class GraalObjectReplacer implements Function<Object, Object> {
                 uniqueImplementation = hType.getUniqueConcreteImplementation().getHub();
             }
             sType.setTypeCheckData(hType.getInstanceOfFromTypeID(), hType.getInstanceOfNumTypeIDs(), uniqueImplementation);
-            SubstrateField[] originalFields = sType.getInstanceFields(false);
-            if (originalFields != null) {
+            if (sType.getInstanceFieldCount() > 1) {
                 /*
                  * What we do here is just a reordering of the instance fields array. The fields
                  * array already contains all the fields, but in the order of the AnalysisType. As
@@ -393,9 +401,7 @@ public class GraalObjectReplacer implements Function<Object, Object> {
                  * order of the HostedType. The correct order is essential for materialization
                  * during deoptimization.
                  */
-                SubstrateField[] newFields = createFields(hType);
-
-                sType.setInstanceFields(newFields);
+                sType.setRawAllInstanceFields(createAllInstanceFields(hType));
             }
         }
 
@@ -437,7 +443,7 @@ public class GraalObjectReplacer implements Function<Object, Object> {
         }
         for (SubstrateType type : types.values()) {
             access.registerAsImmutable(type);
-            access.registerAsImmutable(type.getRawInstanceFields());
+            access.registerAsImmutable(type.getRawAllInstanceFields());
         }
         for (SubstrateSignature signature : signatures.values()) {
             access.registerAsImmutable(signature);

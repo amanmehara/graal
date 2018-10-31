@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -36,10 +38,12 @@ import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.MemoryWalker;
 import com.oracle.svm.core.annotate.AutomaticFeature;
-import com.oracle.svm.core.annotate.MustNotAllocate;
+import com.oracle.svm.core.annotate.RestrictHeapAccess;
 import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.heap.ObjectHeader;
 import com.oracle.svm.core.heap.ObjectVisitor;
+import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.LayoutEncoding;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.snippets.KnownIntrinsics;
@@ -232,11 +236,11 @@ public class AlignedHeapChunk extends HeapChunk {
     /** Construct the remembered set for all the objects in this chunk. */
     /*
      * This method must not allocate because I might be in the middle of a collection, or in the
-     * middle of detaching a thread, but the @MustNotAllocate checker can not prove that because I
-     * use an ObjectVisitor which, in other cases, might allocate. Therefore, I whitelist this
+     * middle of detaching a thread, but the @RestrictHeapAccess checker can not prove that because
+     * I use an ObjectVisitor which, in other cases, might allocate. Therefore, I whitelist this
      * method.
      */
-    @MustNotAllocate(list = MustNotAllocate.WHITELIST, reason = "Whitelisted because other ObjectVisitors are allowed to allocate.")
+    @RestrictHeapAccess(access = RestrictHeapAccess.Access.UNRESTRICTED, overridesCallers = true, reason = "Whitelisted because other ObjectVisitors are allowed to allocate.")
     static void constructRememberedSetOfAlignedHeapChunk(AlignedHeader that) {
         final GCImpl.RememberedSetConstructor constructor = getRememberedSetConstructor();
         constructor.initialize(that);
@@ -254,25 +258,25 @@ public class AlignedHeapChunk extends HeapChunk {
      *
      * This has to be fast, because it is used by the post-write barrier.
      */
-    public static void dirtyCardForObjectOfAlignedHeapChunk(Object obj) {
-        final AlignedHeader chunk = getEnclosingAlignedHeapChunk(obj);
+    public static void dirtyCardForObjectOfAlignedHeapChunk(Object object) {
+        final Pointer objectPointer = Word.objectToUntrackedPointer(object);
+        final AlignedHeader chunk = getEnclosingAlignedHeapChunkFromPointer(objectPointer);
         final Pointer cardTableStart = getCardTableStart(chunk);
-        final UnsignedWord index = getObjectIndex(chunk, obj);
+        final UnsignedWord index = getObjectIndex(chunk, objectPointer);
         CardTable.dirtyEntryAtIndex(cardTableStart, index);
     }
 
     /** Return the offset of an object within the objects part of a chunk. */
-    private static UnsignedWord getObjectOffset(AlignedHeader that, Object obj) {
+    private static UnsignedWord getObjectOffset(AlignedHeader that, Pointer objectPointer) {
         final Pointer objectsStart = getObjectsStart(that);
-        final Pointer objectPointer = Word.objectToUntrackedPointer(obj);
         assert objectsStart.belowOrEqual(objectPointer);
         assert objectPointer.belowOrEqual(that.getEnd());
         return objectPointer.subtract(objectsStart);
     }
 
     /** Return the index of an object within the tables of a chunk. */
-    private static UnsignedWord getObjectIndex(AlignedHeader that, Object obj) {
-        final UnsignedWord offset = getObjectOffset(that, obj);
+    private static UnsignedWord getObjectIndex(AlignedHeader that, Pointer objectPointer) {
+        final UnsignedWord offset = getObjectOffset(that, objectPointer);
         return CardTable.memoryOffsetToIndex(offset);
     }
 
@@ -446,7 +450,7 @@ public class AlignedHeapChunk extends HeapChunk {
 
     /** Walk the dirty Objects in this chunk, passing each to a Visitor. */
     static boolean walkDirtyObjectsOfAlignedHeapChunk(AlignedHeader that, ObjectVisitor visitor, boolean clean) {
-        final Log trace = Log.noopLog().string("[AlignedHeapChunk.walkDirtyObjects:");
+        final Log trace = Log.noopLog().string("[AlignedHeapChunk.walkDirtyObjectsOfAlignedHeapChunk:");
         trace.string("  that: ").hex(that).string("  clean: ").bool(clean);
         /* Iterate through the cards looking for dirty cards. */
         final Pointer cardTableStart = getCardTableStart(that);
@@ -463,6 +467,8 @@ public class AlignedHeapChunk extends HeapChunk {
                 final Pointer cardLimit = CardTable.indexToMemoryPointer(objectsStart, index.add(1));
                 final Pointer crossingOntoPointer = FirstObjectTable.getPreciseFirstObjectPointer(fotStart, objectsStart, objectsLimit, index);
                 final Object crossingOntoObject = crossingOntoPointer.toObject();
+                assert walkDirtyObjectsOfAlignedHeapChunkAssert(crossingOntoObject, that, cardTableStart, fotStart, objectsStart, objectsLimit, cardLimit) //
+                : "AlignedHeapChunk.walkDirtyObjectsOfAlignedHeapChunk: crossingOntoObject hub fails to verify.";
                 if (trace.isEnabled()) {
                     final Pointer cardStart = CardTable.indexToMemoryPointer(objectsStart, index);
                     trace.string("    ").string("  cardStart: ").hex(cardStart);
@@ -492,6 +498,8 @@ public class AlignedHeapChunk extends HeapChunk {
                     trace.newline().string("      ");
                     trace.string("  ptr: ").hex(ptr);
                     final Object obj = ptr.toObject();
+                    assert walkDirtyObjectsOfAlignedHeapChunkAssert(obj, that, cardTableStart, fotStart, objectsStart, objectsLimit, cardLimit) //
+                    : "AlignedHeapChunk.walkDirtyObjectsOfAlignedHeapChunk: obj hub fails to verify.";
                     final Pointer objEnd = LayoutEncoding.getObjectEnd(obj);
                     trace.string("  obj: ").object(obj);
                     trace.string("  objEnd: ").hex(objEnd);
@@ -509,6 +517,34 @@ public class AlignedHeapChunk extends HeapChunk {
             }
         }
         trace.string("]").newline();
+        return true;
+    }
+
+    /** Assert that the hub of obj is well-formed. For GR-9912. */
+    private static boolean walkDirtyObjectsOfAlignedHeapChunkAssert(Object obj,
+                    AlignedHeader that,
+                    Pointer cardTableStart,
+                    Pointer fotStart,
+                    Pointer objectsStart,
+                    Pointer objectsLimit,
+                    Pointer cardLimit) {
+        if (GCImpl.runtimeAssertions() && !HeapImpl.getHeapImpl().assertHubOfObject(obj)) {
+            final Log failureLog = Log.log().string("[AlignedHeapChunk.walkDirtyObjectsOfAlignedHeapChunkAssert:").indent(true);
+            failureLog.string("  that: ").hex(that)
+                            .string("  cardTableStart: ").hex(cardTableStart)
+                            .string("  fotStart: ").hex(fotStart)
+                            .string("  objectsStart: ").hex(objectsStart)
+                            .string("  objectsLimit: ").hex(objectsLimit)
+                            .string("  cardLimit: ").hex(cardLimit).newline();
+            failureLog.string("  obj: ").hex(Word.objectToUntrackedPointer(obj)).indent(true);
+            final UnsignedWord header = ObjectHeader.readHeaderFromObject(obj);
+            final DynamicHub hub = ObjectHeader.dynamicHubFromObjectHeader(header);
+            failureLog.string("  header: ").hex(header)
+                            .string("  hub: ").hex(Word.objectToUntrackedPointer(hub))
+                            .string("  headerBits: ").string(Heap.getHeap().getObjectHeader().toStringFromHeader(header)).indent(false);
+            failureLog.string("  hub fails to verify.]").indent(false);
+            return false;
+        }
         return true;
     }
 

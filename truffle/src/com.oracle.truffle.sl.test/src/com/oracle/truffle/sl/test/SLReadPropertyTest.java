@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,6 +40,8 @@
  */
 package com.oracle.truffle.sl.test;
 
+import static org.junit.Assert.assertNull;
+
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Value;
 import org.junit.After;
@@ -73,11 +75,6 @@ public class SLReadPropertyTest {
     @Test
     public void testRead() {
         Assert.assertEquals(42, slObject.getMember("number").asInt());
-        try {
-            slObject.getMember("nonexistent");
-            Assert.fail("Should not reach here for a non existent field.");
-        } catch (IllegalArgumentException e) {
-            // Expected exception
-        }
+        assertNull(slObject.getMember("nonexistent"));
     }
 }

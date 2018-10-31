@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2012, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -25,11 +27,16 @@ package com.oracle.svm.core;
 import java.io.FileDescriptor;
 import java.io.FileOutputStream;
 import java.nio.ByteBuffer;
-import java.nio.MappedByteBuffer;
+import java.util.Arrays;
 
+import org.graalvm.compiler.api.replacements.Fold;
 import org.graalvm.compiler.graph.Node.NodeIntrinsic;
 import org.graalvm.compiler.nodes.BreakpointNode;
+import org.graalvm.nativeimage.CurrentIsolate;
+import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.IsolateThread;
+import org.graalvm.nativeimage.Platform;
+import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.c.function.CodePointer;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CCharPointerPointer;
@@ -39,16 +46,14 @@ import org.graalvm.word.PointerBase;
 import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.WordFactory;
 
-import com.oracle.svm.core.amd64.FrameAccess;
 import com.oracle.svm.core.annotate.Alias;
-import com.oracle.svm.core.annotate.MustNotAllocate;
 import com.oracle.svm.core.annotate.NeverInline;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.RecomputeFieldValue.Kind;
+import com.oracle.svm.core.annotate.RestrictHeapAccess;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.annotate.Uninterruptible;
 import com.oracle.svm.core.code.CodeInfoTable;
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.deopt.DeoptimizationSupport;
 import com.oracle.svm.core.deopt.DeoptimizedFrame;
 import com.oracle.svm.core.deopt.Deoptimizer;
@@ -59,6 +64,7 @@ import com.oracle.svm.core.stack.JavaFrameAnchors;
 import com.oracle.svm.core.stack.JavaStackWalker;
 import com.oracle.svm.core.stack.StackFrameVisitor;
 import com.oracle.svm.core.stack.ThreadStackPrinter;
+import com.oracle.svm.core.thread.JavaThreads;
 import com.oracle.svm.core.thread.VMOperationControl;
 import com.oracle.svm.core.thread.VMThreads;
 import com.oracle.svm.core.threadlocal.VMThreadLocalInfos;
@@ -140,51 +146,10 @@ public class SubstrateUtil {
         return n;
     }
 
-    @TargetClass(className = "java.nio.DirectByteBuffer")
-    @SuppressWarnings("unused")
-    static final class Target_java_nio_DirectByteBuffer {
-        @Alias
-        Target_java_nio_DirectByteBuffer(long addr, int cap) {
-        }
-
-        @Alias
-        public native long address();
-    }
-
-    @TargetClass(java.lang.String.class)
-    private static final class Target_java_lang_String {
-        @Alias//
-        char[] value;
-
-        @SuppressWarnings("unused")
-        @Alias
-        Target_java_lang_String(char[] value, boolean share) {
-        }
-    }
-
-    /**
-     * Returns the char[] arrays used to store the characters in a {@link String} without any
-     * copying. You must not modify the returned array, otherwise you violate the immutability of
-     * strings.
-     */
-    @Uninterruptible(reason = "Called from uninterruptible code.")
-    public static char[] getRawStringChars(String s) {
-        return KnownIntrinsics.unsafeCast(s, Target_java_lang_String.class).value;
-    }
-
-    /**
-     * Wraps a pointer to C memory into a {@link ByteBuffer}.
-     *
-     * @param pointer The pointer to C memory.
-     * @param size The size of the C memory.
-     * @return A new {@link ByteBuffer} wrapping the pointer.
-     */
+    /** @deprecated replaced by {@link CTypeConversion#asByteBuffer(PointerBase, int)} */
+    @Deprecated
     public static ByteBuffer wrapAsByteBuffer(PointerBase pointer, int size) {
-        return KnownIntrinsics.unsafeCast(new Target_java_nio_DirectByteBuffer(pointer.rawValue(), size), ByteBuffer.class).order(ConfigurationValues.getTarget().arch.getByteOrder());
-    }
-
-    public static <T extends PointerBase> T getBaseAddress(MappedByteBuffer buffer) {
-        return WordFactory.pointer(KnownIntrinsics.unsafeCast(buffer, Target_java_nio_DirectByteBuffer.class).address());
+        return CTypeConversion.asByteBuffer(pointer, size);
     }
 
     /**
@@ -226,8 +191,7 @@ public class SubstrateUtil {
     /**
      * Prints extensive diagnostic information to the given Log.
      */
-    @MustNotAllocate(reason = "Must not allocate during printing diagnostics.")
-    @Uninterruptible(reason = "Allow printDiagnostics to be used in uninterruptible code.", calleeMustBe = false)
+    @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Must not allocate during printing diagnostics.")
     public static void printDiagnostics(Log log, Pointer sp, CodePointer ip) {
         if (diagnosticsInProgress) {
             log.string("Error: printDiagnostics already in progress.").newline();
@@ -261,7 +225,7 @@ public class SubstrateUtil {
             dumpException(log, "dumpVMThreads", e);
         }
 
-        IsolateThread currentThread = KnownIntrinsics.currentVMThread();
+        IsolateThread currentThread = CurrentIsolate.getCurrentThread();
         try {
             dumpVMThreadState(log, currentThread);
         } catch (Exception e) {
@@ -308,7 +272,7 @@ public class SubstrateUtil {
 
         if (VMOperationControl.isFrozen()) {
             for (IsolateThread vmThread = VMThreads.firstThread(); vmThread != VMThreads.nullThread(); vmThread = VMThreads.nextThread(vmThread)) {
-                if (vmThread == KnownIntrinsics.currentVMThread()) {
+                if (vmThread == CurrentIsolate.getCurrentThread()) {
                     continue;
                 }
                 try {
@@ -317,6 +281,12 @@ public class SubstrateUtil {
                     dumpException(log, "dumpStacktrace", e);
                 }
             }
+        }
+
+        try {
+            DiagnosticThunkRegister.getSingleton().callDiagnosticThunks();
+        } catch (Exception e) {
+            dumpException(log, "callThunks", e);
         }
 
         diagnosticsInProgress = false;
@@ -374,7 +344,7 @@ public class SubstrateUtil {
                     log.string("Found matching Anchor:").zhex(anchor.rawValue()).newline();
                     Pointer lastSp = anchor.getLastJavaSP();
                     log.string("LastJavaSP ").zhex(lastSp.rawValue()).newline();
-                    CodePointer lastIp = FrameAccess.readReturnAddress(lastSp);
+                    CodePointer lastIp = FrameAccess.singleton().readReturnAddress(lastSp);
                     log.string("LastJavaIP ").zhex(lastIp.rawValue()).newline();
                 }
             }
@@ -387,7 +357,8 @@ public class SubstrateUtil {
         log.string("VMThreads info:").newline();
         log.indent(true);
         for (IsolateThread vmThread = VMThreads.firstThread(); vmThread != VMThreads.nullThread(); vmThread = VMThreads.nextThread(vmThread)) {
-            log.string("VMThread ").zhex(vmThread.rawValue()).spaces(2).string(VMThreads.StatusSupport.getStatusString(vmThread)).newline();
+            log.string("VMThread ").zhex(vmThread.rawValue()).spaces(2).string(VMThreads.StatusSupport.getStatusString(vmThread))
+                            .spaces(2).object(JavaThreads.singleton().fromVMThread(vmThread)).newline();
         }
         log.indent(false);
     }
@@ -495,5 +466,56 @@ public class SubstrateUtil {
         log.indent(true);
         JavaStackWalker.walkThread(vmThread, ThreadStackPrinter.AllocationFreeStackFrameVisitor);
         log.indent(false);
+    }
+
+    /** The functional interface for a "thunk" that does not allocate. */
+    @FunctionalInterface
+    public interface DiagnosticThunk {
+
+        /** The method to be supplied by the implementor. */
+        @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Must not allocate during printing diagnostics.")
+        void invokeWithoutAllocation();
+    }
+
+    public static class DiagnosticThunkRegister {
+
+        DiagnosticThunk[] diagnosticThunkRegistry;
+
+        /**
+         * Get the register.
+         *
+         * This method is @Fold so anyone who uses it ensures there is a register.
+         */
+        @Fold
+        /* { Checkstyle: allow synchronization. */
+        public static synchronized DiagnosticThunkRegister getSingleton() {
+            if (!ImageSingletons.contains(SubstrateUtil.DiagnosticThunkRegister.class)) {
+                ImageSingletons.add(SubstrateUtil.DiagnosticThunkRegister.class, new DiagnosticThunkRegister());
+            }
+            return ImageSingletons.lookup(SubstrateUtil.DiagnosticThunkRegister.class);
+        }
+        /* } Checkstyle: disallow synchronization. */
+
+        @Platforms(Platform.HOSTED_ONLY.class)
+        DiagnosticThunkRegister() {
+            this.diagnosticThunkRegistry = new DiagnosticThunk[0];
+        }
+
+        /** Register a diagnostic thunk to be called after a segfault. */
+        @Platforms(Platform.HOSTED_ONLY.class)
+        /* { Checkstyle: allow synchronization. */
+        public synchronized void register(DiagnosticThunk diagnosticThunk) {
+            final DiagnosticThunk[] newArray = Arrays.copyOf(diagnosticThunkRegistry, diagnosticThunkRegistry.length + 1);
+            newArray[newArray.length - 1] = diagnosticThunk;
+            diagnosticThunkRegistry = newArray;
+        }
+        /* } Checkstyle: disallow synchronization. */
+
+        /** Call each registered diagnostic thunk. */
+        void callDiagnosticThunks() {
+            for (int i = 0; i < diagnosticThunkRegistry.length; i += 1) {
+                diagnosticThunkRegistry[i].invokeWithoutAllocation();
+            }
+        }
     }
 }

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -42,6 +44,8 @@ import org.graalvm.compiler.nodes.spi.NodeLIRBuilderTool;
 public abstract class AbstractBeginNode extends FixedWithNextNode implements LIRLowerable, GuardingNode, AnchoringNode, IterableNodeType {
 
     public static final NodeClass<AbstractBeginNode> TYPE = NodeClass.create(AbstractBeginNode.class);
+
+    private boolean withSpeculationFence;
 
     protected AbstractBeginNode(NodeClass<? extends AbstractBeginNode> c) {
         this(c, StampFactory.forVoid());
@@ -89,7 +93,9 @@ public abstract class AbstractBeginNode extends FixedWithNextNode implements LIR
 
     @Override
     public void generate(NodeLIRBuilderTool gen) {
-        // nop
+        if (withSpeculationFence) {
+            gen.getLIRGeneratorTool().emitSpeculationFence();
+        }
     }
 
     public NodeIterable<GuardNode> guards() {
@@ -110,7 +116,15 @@ public abstract class AbstractBeginNode extends FixedWithNextNode implements LIR
         };
     }
 
-    private class BlockNodeIterator implements Iterator<FixedNode> {
+    /**
+     * Set this begin node to be a speculation fence. This will prevent speculative execution of
+     * this block.
+     */
+    public void setWithSpeculationFence() {
+        this.withSpeculationFence = true;
+    }
+
+    private static class BlockNodeIterator implements Iterator<FixedNode> {
 
         private FixedNode current;
 

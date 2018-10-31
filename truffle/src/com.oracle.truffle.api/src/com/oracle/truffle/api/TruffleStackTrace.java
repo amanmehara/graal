@@ -1,26 +1,42 @@
 /*
- * Copyright (c) 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api;
 
@@ -47,25 +63,52 @@ final class TruffleStackTrace extends Exception {
     private List<TruffleStackTraceElement> frames;
     private final int lazyFrames;
 
+    // contains host exception frames
+    private Exception materializedHostException;
+
     private TruffleStackTrace(List<TruffleStackTraceElement> frames, int lazyFrames) {
         this.frames = frames;
         this.lazyFrames = lazyFrames;
     }
 
-    /**
-     * Preprocesses the stacktrace by adding "null" elements, which are treated like guest language
-     * calls.
+    /*
+     * Called when an exception leaves the guest boundary and is passed to the host language. This
+     * requires us to capture the host stack frames to build a polyglot stack trace. This can be
+     * done lazily because if an exception stays inside a guest language (is thrown and caught in
+     * the guest language) there is no need to pay the price for host frames. If the error is a non
+     * TruffleException internal error then the exception (e.g. NullPointerException) has already
+     * captured the host stack trace and this host exception stack trace is not used.
      */
+    private void materializeHostException() {
+        if (this.materializedHostException == null) {
+            this.materializedHostException = new Exception();
+        }
+    }
+
+    @SuppressWarnings("sync-override")
     @Override
-    public StackTraceElement[] getStackTrace() {
-        StackTraceElement[] stackTrace = super.getStackTrace();
+    public Throwable fillInStackTrace() {
+        return this;
+    }
+
+    StackTraceElement[] getInternalStackTrace() {
+        Throwable hostException = this.materializedHostException;
+        if (hostException == null) {
+            hostException = this;
+        }
+        StackTraceElement[] hostFrames = hostException.getStackTrace();
         if (lazyFrames == 0) {
-            return stackTrace;
+            return hostFrames;
         } else {
-            StackTraceElement[] extended = new StackTraceElement[stackTrace.length + lazyFrames];
-            System.arraycopy(stackTrace, 0, extended, lazyFrames, stackTrace.length);
+            StackTraceElement[] extended = new StackTraceElement[hostFrames.length + lazyFrames];
+            System.arraycopy(hostFrames, 0, extended, lazyFrames, hostFrames.length);
             return extended;
         }
+    }
+
+    @Override
+    public String toString() {
+        return "Attached Guest Language Frames (" + frames.size() + ")";
     }
 
     @TruffleBoundary
@@ -75,6 +118,13 @@ final class TruffleStackTrace extends Exception {
             return stack.frames;
         }
         return null;
+    }
+
+    static void materializeHostFrames(Throwable t) {
+        TruffleStackTrace stack = fillIn(t);
+        if (stack != null) {
+            stack.materializeHostException();
+        }
     }
 
     private static LazyStackTrace findImpl(Throwable t) {
@@ -185,7 +235,7 @@ final class TruffleStackTrace extends Exception {
         }
     }
 
-    private static final class LazyStackTrace extends Throwable {
+    static final class LazyStackTrace extends Throwable {
 
         /**
          * The root of a linked list of pieces of information about the stack trace of the
@@ -210,9 +260,7 @@ final class TruffleStackTrace extends Exception {
             return null;
         }
 
-        @SuppressWarnings("sync-override")
-        @Override
-        public Throwable getCause() {
+        public TruffleStackTrace getInternalStackTrace() {
             return stackTrace;
         }
 
@@ -220,6 +268,11 @@ final class TruffleStackTrace extends Exception {
         @Override
         public Throwable initCause(Throwable cause) {
             throw new IllegalAccessError("cannot change cause of TruffleException stacktrace");
+        }
+
+        @Override
+        public String toString() {
+            return "Attached Guest Language Frames (" + (frameCount + (stackTrace != null ? stackTrace.frames.size() : 0)) + ")";
         }
     }
 
@@ -309,4 +362,5 @@ final class TruffleStackTrace extends Exception {
             }
         });
     }
+
 }

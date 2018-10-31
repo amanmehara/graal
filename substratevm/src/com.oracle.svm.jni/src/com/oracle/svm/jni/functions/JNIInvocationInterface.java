@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,6 +24,8 @@
  */
 package com.oracle.svm.jni.functions;
 
+import static com.oracle.svm.core.option.RuntimeOptionParser.DEFAULT_OPTION_PREFIX;
+import static com.oracle.svm.core.option.SubstrateOptionsParser.BooleanOptionFormat.PLUS_MINUS;
 import static com.oracle.svm.jni.nativeapi.JNIVersion.JNI_VERSION_1_1;
 import static com.oracle.svm.jni.nativeapi.JNIVersion.JNI_VERSION_1_2;
 import static com.oracle.svm.jni.nativeapi.JNIVersion.JNI_VERSION_1_4;
@@ -32,30 +36,34 @@ import java.io.CharConversionException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 
-import org.graalvm.compiler.word.Word;
+import org.graalvm.nativeimage.Isolate;
 import org.graalvm.nativeimage.c.function.CEntryPoint;
-import org.graalvm.nativeimage.c.function.CEntryPointContext;
 import org.graalvm.nativeimage.c.struct.SizeOf;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CIntPointer;
 import org.graalvm.nativeimage.c.type.CTypeConversion;
 import org.graalvm.nativeimage.c.type.WordPointer;
 import org.graalvm.word.Pointer;
+import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.MonitorSupport;
-import com.oracle.svm.core.SubstrateUtil;
+import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.annotate.Uninterruptible;
 import com.oracle.svm.core.c.function.CEntryPointActions;
+import com.oracle.svm.core.c.function.CEntryPointErrors;
 import com.oracle.svm.core.c.function.CEntryPointOptions;
 import com.oracle.svm.core.c.function.CEntryPointOptions.NoEpilogue;
 import com.oracle.svm.core.c.function.CEntryPointOptions.NoPrologue;
 import com.oracle.svm.core.c.function.CEntryPointOptions.Publish;
+import com.oracle.svm.core.c.function.CEntryPointSetup;
 import com.oracle.svm.core.c.function.CEntryPointSetup.LeaveDetachThreadEpilogue;
 import com.oracle.svm.core.c.function.CEntryPointSetup.LeaveTearDownIsolateEpilogue;
+import com.oracle.svm.core.jdk.RuntimeSupport;
 import com.oracle.svm.core.option.RuntimeOptionParser;
 import com.oracle.svm.core.properties.RuntimePropertyParser;
 import com.oracle.svm.core.thread.JavaThreads;
 import com.oracle.svm.core.util.Utf8;
+import com.oracle.svm.jni.JNIJavaVMList;
 import com.oracle.svm.jni.JNIObjectHandles;
 import com.oracle.svm.jni.JNIThreadLocalEnvironment;
 import com.oracle.svm.jni.JNIThreadOwnedMonitors;
@@ -89,31 +97,9 @@ final class JNIInvocationInterface {
 
         @CEntryPoint(name = "JNI_GetCreatedJavaVMs")
         @CEntryPointOptions(prologue = NoPrologue.class, epilogue = NoEpilogue.class, publishAs = Publish.SymbolOnly, include = CEntryPointOptions.NotIncludedAutomatically.class)
-        @Uninterruptible(reason = "No Java context", calleeMustBe = false)
+        @Uninterruptible(reason = "No Java context.")
         static int JNI_GetCreatedJavaVMs(JNIJavaVMPointer vmBuf, int bufLen, CIntPointer nVMs) {
-            /*
-             * TODO: still less than ideal because it requires us to briefly attach to the isolate
-             * to get the global Java VM pointer. Revisit when isolates are fully supported.
-             */
-            boolean didAttach = false;
-            if (CEntryPointActions.enterIsolate(Word.nullPointer()) != 0) {
-                // Either there is no isolate, or the current thread is not attached to it
-                if (CEntryPointActions.enterAttachThread(Word.nullPointer()) != 0) {
-                    // Could not attach: there is no isolate (or there was some problem)
-                    nVMs.write(0);
-                    return JNIErrors.JNI_OK();
-                }
-                didAttach = true;
-            }
-            // We have successfully entered the isolate at this point
-            JNIJavaVM jvm = Support.getGlobalJavaVM();
-            vmBuf.write(jvm);
-            nVMs.write(1);
-            if (didAttach) {
-                CEntryPointActions.leaveDetachThread();
-            } else {
-                CEntryPointActions.leave();
-            }
+            JNIJavaVMList.gather(vmBuf, bufLen, nVMs);
             return JNIErrors.JNI_OK();
         }
 
@@ -123,11 +109,16 @@ final class JNIInvocationInterface {
 
         static class JNICreateJavaVMPrologue {
             static void enter(JNIJavaVMPointer vmBuf, JNIEnvironmentPointer penv, JNIJavaVMInitArgs vmArgs) {
-                if (CEntryPointActions.enterIsolate(Word.nullPointer()) == 0) {
-                    CEntryPointActions.leave();
-                    CEntryPointActions.bailoutInPrologue(JNIErrors.JNI_EEXIST()); // isolate exists
+                if (!SubstrateOptions.SpawnIsolates.getValue()) {
+                    int error = CEntryPointActions.enterIsolate((Isolate) CEntryPointSetup.SINGLE_ISOLATE_SENTINEL);
+                    if (error != CEntryPointErrors.UNINITIALIZED_ISOLATE) {
+                        if (error == CEntryPointErrors.NO_ERROR) {
+                            CEntryPointActions.leave();
+                        }
+                        CEntryPointActions.bailoutInPrologue(JNIErrors.JNI_EEXIST());
+                    }
                 }
-                if (CEntryPointActions.enterCreateIsolate(Word.nullPointer()) != 0) {
+                if (CEntryPointActions.enterCreateIsolate(WordFactory.nullPointer()) != 0) {
                     CEntryPointActions.bailoutInPrologue(JNIErrors.JNI_ERR());
                 }
             }
@@ -149,10 +140,18 @@ final class JNIInvocationInterface {
                     }
                 }
                 String[] optionArray = options.toArray(new String[0]);
-                optionArray = RuntimeOptionParser.singleton().parse(optionArray, RuntimeOptionParser.DEFAULT_OPTION_PREFIX);
+                optionArray = RuntimeOptionParser.singleton().parse(optionArray, DEFAULT_OPTION_PREFIX, PLUS_MINUS, true);
                 RuntimePropertyParser.parse(optionArray);
             }
-            vmBuf.write(JNIFunctionTables.singleton().getGlobalJavaVM());
+            JNIJavaVM javavm = JNIFunctionTables.singleton().getGlobalJavaVM();
+            JNIJavaVMList.addJavaVM(javavm);
+            RuntimeSupport.getRuntimeSupport().addTearDownHook(new Runnable() {
+                @Override
+                public void run() {
+                    JNIJavaVMList.removeJavaVM(javavm);
+                }
+            });
+            vmBuf.write(javavm);
             if (!JNIThreadLocalEnvironment.isInitialized()) {
                 JNIThreadLocalEnvironment.initialize();
             }
@@ -246,11 +245,11 @@ final class JNIInvocationInterface {
                     CEntryPointActions.bailoutInPrologue(JNIErrors.JNI_ERR());
                 }
                 if (version != JNI_VERSION_1_8() && version != JNI_VERSION_1_6() && version != JNI_VERSION_1_4() && version != JNI_VERSION_1_2() && version != JNI_VERSION_1_1()) {
-                    env.write(Word.nullPointer());
+                    env.write(WordFactory.nullPointer());
                     CEntryPointActions.bailoutInPrologue(JNIErrors.JNI_EVERSION());
                 }
-                if (!CEntryPointContext.isCurrentThreadAttachedTo(vm.getFunctions().getIsolate())) {
-                    env.write(Word.nullPointer());
+                if (!CEntryPointActions.isCurrentThreadAttachedTo(vm.getFunctions().getIsolate())) {
+                    env.write(WordFactory.nullPointer());
                     CEntryPointActions.bailoutInPrologue(JNIErrors.JNI_EDETACHED());
                 }
                 if (CEntryPointActions.enterIsolate(vm.getFunctions().getIsolate()) != 0) {
@@ -270,7 +269,7 @@ final class JNIInvocationInterface {
                 if (args.isNonNull() && args.getVersion() != JNIVersion.JNI_VERSION_1_1()) {
                     group = JNIObjectHandles.getObject(args.getGroup());
                     if (args.getName().isNonNull()) {
-                        ByteBuffer buffer = SubstrateUtil.wrapAsByteBuffer(args.getName(), Integer.MAX_VALUE);
+                        ByteBuffer buffer = CTypeConversion.asByteBuffer(args.getName(), Integer.MAX_VALUE);
                         try {
                             name = Utf8.utf8ToString(true, buffer);
                         } catch (CharConversionException ignore) {

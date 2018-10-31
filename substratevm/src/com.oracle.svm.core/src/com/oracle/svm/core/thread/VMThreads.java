@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -24,10 +26,14 @@ package com.oracle.svm.core.thread;
 
 import org.graalvm.compiler.api.replacements.Fold;
 import org.graalvm.nativeimage.ImageSingletons;
+import org.graalvm.nativeimage.Isolate;
 import org.graalvm.nativeimage.IsolateThread;
+import org.graalvm.nativeimage.c.type.CCharPointer;
+import org.graalvm.word.ComparableWord;
 import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.annotate.Uninterruptible;
+import com.oracle.svm.core.jdk.UninterruptibleUtils;
 import com.oracle.svm.core.locks.VMCondition;
 import com.oracle.svm.core.locks.VMMutex;
 import com.oracle.svm.core.threadlocal.FastThreadLocalFactory;
@@ -58,6 +64,79 @@ public abstract class VMThreads {
 
     /** The next element in the linked list of {@link IsolateThread}s. */
     private static final FastThreadLocalWord<IsolateThread> nextTL = FastThreadLocalFactory.createWord();
+    private static final FastThreadLocalWord<ComparableWord> OSThreadIdTL = FastThreadLocalFactory.createWord();
+    public static final FastThreadLocalWord<Isolate> IsolateTL = FastThreadLocalFactory.createWord();
+
+    private static final int STATE_UNINITIALIZED = 1;
+    private static final int STATE_INITIALIZING = 2;
+    private static final int STATE_INITIALIZED = 3;
+    private static final int STATE_TEARING_DOWN = 4;
+    private static final UninterruptibleUtils.AtomicInteger initializationState = new UninterruptibleUtils.AtomicInteger(STATE_UNINITIALIZED);
+
+    @Uninterruptible(reason = "Called from uninterruptible code. Too early for safepoints.")
+    public static boolean isInitialized() {
+        return initializationState.get() >= STATE_INITIALIZED;
+    }
+
+    /** Is threading being torn down? */
+    @Uninterruptible(reason = "Called from uninterruptible code during tear down.")
+    public static boolean isTearingDown() {
+        return initializationState.get() >= STATE_TEARING_DOWN;
+    }
+
+    /** Note that threading is being torn down. */
+    protected static void setTearingDown() {
+        initializationState.set(STATE_TEARING_DOWN);
+    }
+
+    /**
+     * Make sure the runtime is initialized for threading.
+     */
+    @Uninterruptible(reason = "Called from uninterruptible code. Too early for safepoints.")
+    public static boolean ensureInitialized() {
+        boolean result = true;
+        if (initializationState.compareAndSet(STATE_UNINITIALIZED, STATE_INITIALIZING)) {
+            /*
+             * We claimed the initialization lock, so we are now responsible for doing all the
+             * initialization.
+             */
+            result = singleton().initializeOnce();
+
+            initializationState.set(STATE_INITIALIZED);
+        } else {
+            /* Already initialized, or some other thread claimed the initialization lock. */
+            while (initializationState.get() < STATE_INITIALIZED) {
+                /* Busy wait until the other thread finishes the initialization. */
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Invoked exactly once early during the startup of an isolate. Subclasses can perform
+     * initialization of native OS resources.
+     */
+    @Uninterruptible(reason = "Called from uninterruptible code. Too early for safepoints.")
+    protected abstract boolean initializeOnce();
+
+    /**
+     * Allocate native memory for a {@link IsolateThread}. The returned memory must be initialized
+     * to 0.
+     */
+    @Uninterruptible(reason = "Thread state not set up.")
+    public abstract IsolateThread allocateIsolateThread(int isolateThreadSize);
+
+    /**
+     * Free the native memorry allocated by {@link #allocateIsolateThread}.
+     */
+    @Uninterruptible(reason = "Thread state not set up.")
+    public abstract void freeIsolateThread(IsolateThread thread);
+
+    /**
+     * Report a fatal error to the user and exit. This method must not return.
+     */
+    @Uninterruptible(reason = "Unknown thread state.")
+    public abstract void failFatally(int code, CCharPointer message);
 
     /** The value of a {@code null} {@link IsolateThread}. */
     @Uninterruptible(reason = "Called from uninterruptible code.")
@@ -67,13 +146,13 @@ public abstract class VMThreads {
     }
 
     /** A predicate for the {@code null} {@link IsolateThread}. */
-    @Uninterruptible(reason = "Called from uninterruptible code.")
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static boolean isNullThread(IsolateThread vmThread) {
         return vmThread.isNull();
     }
 
     /** A predicate for the {@code non-null} {@link IsolateThread}. */
-    @Uninterruptible(reason = "Called from uninterruptible code.")
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static boolean isNonNullThread(IsolateThread vmThread) {
         return vmThread.isNonNull();
     }
@@ -89,6 +168,7 @@ public abstract class VMThreads {
      * for (VMThread thread = VMThreads.firstThread(); VMThreads.isNonNullThread(thread); thread = VMThreads.nextThread(thread)) {
      * </pre>
      */
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static IsolateThread firstThread() {
         return head;
     }
@@ -97,12 +177,8 @@ public abstract class VMThreads {
      * Iteration of all {@link IsolateThread}s that are currently running. See
      * {@link #firstThread()} for details.
      */
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static IsolateThread nextThread(IsolateThread cur) {
-        return nextTL.get(cur);
-    }
-
-    /** Iteration of all {@link IsolateThread}s on a stolen list. */
-    public static IsolateThread nextThreadFromList(IsolateThread cur) {
         return nextTL.get(cur);
     }
 
@@ -111,33 +187,22 @@ public abstract class VMThreads {
      * must be the first method called in every thread.
      */
     @Uninterruptible(reason = "Reason: Thread register not yet set up.")
-    public static void attachThread(IsolateThread vmThread) {
-        assert StatusSupport.isStatusCreated(vmThread) : "Status should be initialized on creation.";
-        // Manipulating the VMThread list requires the lock for
-        // changing the status and for notification.
-        // But the VMThread for the current thread is not set up yet,
-        // so the locking must be without transitions.
-        attachThreadUnderLock(vmThread);
-    }
+    public void attachThread(IsolateThread thread) {
+        assert StatusSupport.isStatusCreated(thread) : "Status should be initialized on creation.";
+        OSThreadIdTL.set(thread, getCurrentOSThreadId());
 
-    /**
-     * The body of {@link #attachThread} that is executed under the VMThreads mutex. With that mutex
-     * held, callees do not need to be annotated with {@link Uninterruptible}.
-     * <p>
-     * Using try-finally rather than a try-with-resources to avoid implicitly calling
-     * {@link Throwable#addSuppressed(Throwable)}, which I can not annotate as uninterruptible.
-     */
-    @Uninterruptible(reason = "Reason: Thread register not yet set up.")
-    public static void attachThreadUnderLock(IsolateThread vmThread) {
-        VMMutex lock = VMThreads.THREAD_MUTEX;
+        // Manipulating the VMThread list requires the lock, but the IsolateThread is not set up
+        // yet, so the locking must be without transitions. Not using try-with-resources to avoid
+        // implicitly calling addSuppressed(), which is not uninterruptible.
+        VMThreads.THREAD_MUTEX.lockNoTransition();
         try {
-            lock.lockNoTransition();
             VMThreads.THREAD_MUTEX.guaranteeIsLocked("Must hold the VMThreads lock.");
-            nextTL.set(vmThread, head);
-            head = vmThread;
+            nextTL.set(thread, head);
+            head = thread;
+            StatusSupport.setStatusNative(thread);
             VMThreads.THREAD_LIST_CONDITION.broadcast();
         } finally {
-            lock.unlock();
+            VMThreads.THREAD_MUTEX.unlock();
         }
     }
 
@@ -172,17 +237,36 @@ public abstract class VMThreads {
         VMThreads.THREAD_LIST_CONDITION.broadcast();
     }
 
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    protected abstract ComparableWord getCurrentOSThreadId();
+
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public IsolateThread findIsolateThreadforCurrentOSThread() {
+        ComparableWord id = getCurrentOSThreadId();
+        IsolateThread thread;
+        for (thread = head; isNonNullThread(thread) && OSThreadIdTL.get(thread).notEqual(id); thread = nextThread(thread)) {
+        }
+        return thread;
+    }
+
     /*
      * Access to platform-specific implementations.
      */
-
-    protected abstract void setTearingDown();
 
     /** A thread-local enum giving the thread status of a VMThread. And supporting methods. */
     public static class StatusSupport {
 
         /** The status of a {@link IsolateThread}. */
         private static final FastThreadLocalInt statusTL = FastThreadLocalFactory.createInt();
+
+        /**
+         * Boolean flag whether safepoints are disabled. This is a separate thread local in addition
+         * to the {@link #statusTL} because we need the disabled flag to be "sticky": once
+         * safepoints are disabled, they must never be enabled again. Either the thread is getting
+         * detached, or a fatal error occurred and we are printing diagnostics before killing the
+         * VM.
+         */
+        private static final FastThreadLocalInt safepointsDisabledTL = FastThreadLocalFactory.createInt();
 
         /**
          * {@link IsolateThread} memory has been allocated for the thread, but the thread is not on
@@ -195,25 +279,17 @@ public abstract class VMThreads {
         private static final int STATUS_IN_SAFEPOINT = STATUS_IN_JAVA + 1;
         /** The thread is running in native code. */
         private static final int STATUS_IN_NATIVE = STATUS_IN_SAFEPOINT + 1;
-        /** The thread has exited its run method. */
-        private static final int STATUS_IGNORE_SAFEPOINTS = STATUS_IN_NATIVE + 1;
-        /** The thread has exited its run method. */
-        private static final int STATUS_EXITED = STATUS_IGNORE_SAFEPOINTS + 1;
 
-        private static String statusToString(int status) {
+        private static String statusToString(int status, boolean safepointsDisabled) {
             switch (status) {
                 case STATUS_CREATED:
-                    return "STATUS_CREATED";
+                    return safepointsDisabled ? "STATUS_CREATED (safepoints disabled)" : "STATUS_CREATED";
                 case STATUS_IN_JAVA:
-                    return "STATUS_IN_JAVA";
+                    return safepointsDisabled ? "STATUS_IN_JAVA (safepoints disabled)" : "STATUS_IN_JAVA";
                 case STATUS_IN_SAFEPOINT:
-                    return "STATUS_IN_SAFEPOINT";
+                    return safepointsDisabled ? "STATUS_IN_SAFEPOINT (safepoints disabled)" : "STATUS_IN_SAFEPOINT";
                 case STATUS_IN_NATIVE:
-                    return "STATUS_IN_NATIVE";
-                case STATUS_EXITED:
-                    return "STATUS_EXITED";
-                case STATUS_IGNORE_SAFEPOINTS:
-                    return "STATUS_IGNORE_SAFEPOINTS";
+                    return safepointsDisabled ? "STATUS_IN_NATIVE (safepoints disabled)" : "STATUS_IN_NATIVE";
                 default:
                     return "STATUS error";
             }
@@ -223,7 +299,7 @@ public abstract class VMThreads {
 
         /** For debugging. */
         public static String getStatusString(IsolateThread vmThread) {
-            return statusToString(statusTL.getVolatile(vmThread));
+            return statusToString(statusTL.getVolatile(vmThread), isStatusIgnoreSafepoints(vmThread));
         }
 
         @Uninterruptible(reason = "Called from uninterruptible code.")
@@ -240,6 +316,7 @@ public abstract class VMThreads {
             statusTL.set(STATUS_IN_NATIVE);
         }
 
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
         public static void setStatusNative(IsolateThread vmThread) {
             statusTL.setVolatile(vmThread, STATUS_IN_NATIVE);
         }
@@ -273,29 +350,17 @@ public abstract class VMThreads {
 
         @Uninterruptible(reason = "Called from uninterruptible code.")
         public static boolean isStatusIgnoreSafepoints(IsolateThread vmThread) {
-            return (statusTL.getVolatile(vmThread) == STATUS_IGNORE_SAFEPOINTS);
-        }
-
-        @Uninterruptible(reason = "Called from uninterruptible code.")
-        public static boolean isStatusExited(IsolateThread vmThread) {
-            return (statusTL.getVolatile(vmThread) == STATUS_EXITED);
-        }
-
-        @Uninterruptible(reason = "Called from uninterruptible code.")
-        public static void setStatusExited() {
-            statusTL.setVolatile(STATUS_EXITED);
+            return safepointsDisabledTL.getVolatile(vmThread) == 1;
         }
 
         /**
          * Make myself immune to safepoints. Set the thread status to ensure that the safepoint
-         * mechanism ignores me, and clear any pending safepoint requests, since I will not honor
-         * them. Use with care. It causes code to run slower in case of safepoint-requests (due to
-         * subsequent slow-path code execution).
+         * mechanism ignores me. It is not necessary to clear a pending safepoint request (i.e., to
+         * reset the safepoint counter) because the safepoint slow path is going to do that in case.
          */
         @Uninterruptible(reason = "Called from uninterruptible code.")
         public static void setStatusIgnoreSafepoints() {
-            statusTL.setVolatile(STATUS_IGNORE_SAFEPOINTS);
-            Safepoint.setSafepointRequested(Safepoint.SafepointRequestValues.RESET);
+            safepointsDisabledTL.setVolatile(1);
         }
     }
 }

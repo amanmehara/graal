@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -31,6 +33,8 @@ import com.oracle.svm.core.option.RuntimeOptionValues;
 import com.oracle.svm.graal.meta.SubstrateMethod;
 import com.oracle.svm.hosted.FeatureImpl.DuringAnalysisAccessImpl;
 import org.graalvm.collections.EconomicMap;
+import org.graalvm.compiler.api.replacements.MethodSubstitution;
+import org.graalvm.compiler.api.replacements.Snippet;
 import org.graalvm.compiler.core.CompilationWrapper.ExceptionAction;
 import org.graalvm.compiler.core.common.CompilationIdentifier;
 import org.graalvm.compiler.core.gen.NodeMatchRules;
@@ -253,16 +257,17 @@ public class GraalSupport {
         if (startOffset == -1) {
             return null;
         }
-        return new EncodedGraph(get().graphEncoding, startOffset, get().graphObjects, get().graphNodeTypes, null, null, trackNodeSourcePosition);
+        return new EncodedGraph(get().graphEncoding, startOffset, get().graphObjects, get().graphNodeTypes, null, null, null, false, trackNodeSourcePosition);
     }
 
     public static StructuredGraph decodeGraph(DebugContext debug, String name, CompilationIdentifier compilationId, SharedRuntimeMethod method) {
-        EncodedGraph encodedGraph = encodedGraph(method, false); // XXX
+        EncodedGraph encodedGraph = encodedGraph(method, false);
         if (encodedGraph == null) {
             return null;
         }
 
-        StructuredGraph graph = new StructuredGraph.Builder(debug.getOptions(), debug).name(name).method(method).compilationId(compilationId).build();
+        boolean isSubstitution = method.getAnnotation(Snippet.class) != null || method.getAnnotation(MethodSubstitution.class) != null;
+        StructuredGraph graph = new StructuredGraph.Builder(debug.getOptions(), debug).name(name).method(method).compilationId(compilationId).setIsSubstitution(isSubstitution).build();
         GraphDecoder decoder = new GraphDecoder(ConfigurationValues.getTarget().arch, graph);
         decoder.decode(encodedGraph);
         return graph;

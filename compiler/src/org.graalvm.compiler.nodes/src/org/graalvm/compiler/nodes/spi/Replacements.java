@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -26,6 +28,7 @@ import org.graalvm.compiler.api.replacements.MethodSubstitution;
 import org.graalvm.compiler.api.replacements.SnippetTemplateCache;
 import org.graalvm.compiler.bytecode.Bytecode;
 import org.graalvm.compiler.bytecode.BytecodeProvider;
+import org.graalvm.compiler.graph.NodeSourcePosition;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.graphbuilderconf.GraphBuilderConfiguration;
 import org.graalvm.compiler.nodes.graphbuilderconf.InvocationPlugin;
@@ -53,7 +56,7 @@ public interface Replacements {
      * @param trackNodeSourcePosition
      * @return the snippet graph, if any, that is derived from {@code method}
      */
-    StructuredGraph getSnippet(ResolvedJavaMethod method, Object[] args, boolean trackNodeSourcePosition);
+    StructuredGraph getSnippet(ResolvedJavaMethod method, Object[] args, boolean trackNodeSourcePosition, NodeSourcePosition replaceePosition);
 
     /**
      * Gets the snippet graph derived from a given method.
@@ -65,7 +68,7 @@ public interface Replacements {
      * @param trackNodeSourcePosition
      * @return the snippet graph, if any, that is derived from {@code method}
      */
-    StructuredGraph getSnippet(ResolvedJavaMethod method, ResolvedJavaMethod recursiveEntry, Object[] args, boolean trackNodeSourcePosition);
+    StructuredGraph getSnippet(ResolvedJavaMethod method, ResolvedJavaMethod recursiveEntry, Object[] args, boolean trackNodeSourcePosition, NodeSourcePosition replaceePosition);
 
     /**
      * Registers a method as snippet.
@@ -80,7 +83,7 @@ public interface Replacements {
      * @param trackNodeSourcePosition
      * @return the graph, if any, that is a substitution for {@code method}
      */
-    StructuredGraph getSubstitution(ResolvedJavaMethod method, int invokeBci, boolean trackNodeSourcePosition);
+    StructuredGraph getSubstitution(ResolvedJavaMethod method, int invokeBci, boolean trackNodeSourcePosition, NodeSourcePosition replaceePosition);
 
     /**
      * Gets the substitute bytecode for a given method.
@@ -91,7 +94,8 @@ public interface Replacements {
     Bytecode getSubstitutionBytecode(ResolvedJavaMethod method);
 
     /**
-     * Determines if there may be a {@linkplain #getSubstitution(ResolvedJavaMethod, int, boolean)
+     * Determines if there may be a
+     * {@linkplain #getSubstitution(ResolvedJavaMethod, int, boolean, NodeSourcePosition)
      * substitution graph} for a given method.
      *
      * A call to {@link #getSubstitution} may still return {@code null} for {@code method} and

@@ -1,24 +1,42 @@
 /*
- * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.dsl.processor.parser;
 
@@ -56,6 +74,7 @@ import javax.tools.Diagnostic.Kind;
 import com.oracle.truffle.api.Assumption;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.CreateCast;
+import com.oracle.truffle.api.dsl.Executed;
 import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.GeneratedBy;
@@ -65,10 +84,12 @@ import com.oracle.truffle.api.dsl.NodeChild;
 import com.oracle.truffle.api.dsl.NodeChildren;
 import com.oracle.truffle.api.dsl.NodeField;
 import com.oracle.truffle.api.dsl.NodeFields;
+import com.oracle.truffle.api.dsl.ReportPolymorphism;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.dsl.TypeSystemReference;
 import com.oracle.truffle.api.frame.Frame;
-import com.oracle.truffle.api.nodes.NodeInfo;
+import com.oracle.truffle.api.nodes.Node.Child;
+import com.oracle.truffle.api.nodes.Node.Children;
 import com.oracle.truffle.api.nodes.NodeInterface;
 import com.oracle.truffle.dsl.processor.CompileErrorException;
 import com.oracle.truffle.dsl.processor.Log;
@@ -104,7 +125,9 @@ public class NodeParser extends AbstractParser<NodeData> {
     public static final List<Class<? extends Annotation>> ANNOTATIONS = Arrays.asList(Fallback.class, TypeSystemReference.class,
                     Specialization.class,
                     NodeChild.class,
-                    NodeChildren.class);
+                    Executed.class,
+                    NodeChildren.class,
+                    ReportPolymorphism.class);
 
     @Override
     protected NodeData parse(Element element, AnnotationMirror mirror) {
@@ -205,8 +228,13 @@ public class NodeParser extends AbstractParser<NodeData> {
             node.setReflectable(true);
         }
 
+        AnnotationMirror reportPolymorphism = findFirstAnnotation(lookupTypes, ReportPolymorphism.class);
+        AnnotationMirror excludePolymorphism = findFirstAnnotation(lookupTypes, ReportPolymorphism.Exclude.class);
+        if (reportPolymorphism != null && excludePolymorphism == null) {
+            node.setReportPolymorphism(true);
+        }
         node.getFields().addAll(parseFields(lookupTypes, members));
-        node.getChildren().addAll(parseChildren(lookupTypes, members));
+        node.getChildren().addAll(parseChildren(node, lookupTypes, members));
         node.getChildExecutions().addAll(parseExecutions(node.getFields(), node.getChildren(), members));
         node.getExecutableTypes().addAll(parseExecutableTypeData(node, members, node.getSignatureSize(), context.getFrameTypes(), false));
 
@@ -233,6 +261,7 @@ public class NodeParser extends AbstractParser<NodeData> {
         verifyMissingAbstractMethods(node, members);
         verifyConstructors(node);
         verifySpecializationThrows(node);
+        verifyFrame(node);
         return node;
     }
 
@@ -500,13 +529,8 @@ public class NodeParser extends AbstractParser<NodeData> {
             // default dummy type system
             typeSystem = new TypeSystemData(context, templateType, null, true);
         }
-        AnnotationMirror nodeInfoMirror = findFirstAnnotation(typeHierarchy, NodeInfo.class);
-        String shortName = null;
-        if (nodeInfoMirror != null) {
-            shortName = ElementUtils.getAnnotationValue(String.class, nodeInfoMirror, "shortName");
-        }
         boolean useNodeFactory = findFirstAnnotation(typeHierarchy, GenerateNodeFactory.class) != null;
-        return new NodeData(context, templateType, shortName, typeSystem, useNodeFactory);
+        return new NodeData(context, templateType, typeSystem, useNodeFactory);
 
     }
 
@@ -516,6 +540,8 @@ public class NodeParser extends AbstractParser<NodeData> {
         List<NodeFieldData> fields = new ArrayList<>();
         for (VariableElement field : ElementFilter.fieldsIn(elements)) {
             if (field.getModifiers().contains(Modifier.STATIC)) {
+                continue;
+            } else if (field.getAnnotation(Executed.class) != null) {
                 continue;
             }
             if (field.getModifiers().contains(Modifier.PUBLIC) || field.getModifiers().contains(Modifier.PROTECTED)) {
@@ -560,7 +586,7 @@ public class NodeParser extends AbstractParser<NodeData> {
         return fields;
     }
 
-    private List<NodeChildData> parseChildren(final List<TypeElement> typeHierarchy, List<? extends Element> elements) {
+    private List<NodeChildData> parseChildren(NodeData node, final List<TypeElement> typeHierarchy, List<? extends Element> elements) {
         Map<String, TypeMirror> castNodeTypes = new HashMap<>();
         for (ExecutableElement method : ElementFilter.methodsIn(elements)) {
             AnnotationMirror mirror = ElementUtils.findAnnotationMirror(processingEnv, method, CreateCast.class);
@@ -574,14 +600,67 @@ public class NodeParser extends AbstractParser<NodeData> {
             }
         }
 
-        List<NodeChildData> parsedChildren = new ArrayList<>();
+        List<NodeChildData> executedFieldChildren = new ArrayList<>();
+        for (VariableElement field : ElementFilter.fieldsIn(elements)) {
+            if (field.getModifiers().contains(Modifier.STATIC)) {
+                continue;
+            }
+            AnnotationMirror executed = ElementUtils.findAnnotationMirror(field.getAnnotationMirrors(), context.getDeclaredType(Executed.class));
+            if (executed != null) {
+                TypeMirror type = field.asType();
+                String name = field.getSimpleName().toString();
+                Cardinality cardinality = Cardinality.ONE;
+                if (type.getKind() == TypeKind.ARRAY) {
+                    cardinality = Cardinality.MANY;
+                }
+                AnnotationValue executedWith = ElementUtils.getAnnotationValue(executed, "with");
+                NodeChildData child = new NodeChildData(field, executed, name, type, type, field, cardinality, executedWith);
+                executedFieldChildren.add(child);
+
+                if (field.getModifiers().contains(Modifier.PRIVATE)) {
+                    child.addError("Field annotated with @%s must be visible for the generated subclass to execute.", Executed.class.getSimpleName());
+                }
+
+                if (cardinality == Cardinality.ONE) {
+                    if (field.getAnnotation(Child.class) == null) {
+                        child.addError("Field annotated with @%s must also be annotated with @%s.", Executed.class.getSimpleName(), Child.class.getSimpleName());
+                    }
+                } else {
+                    assert cardinality == Cardinality.MANY;
+                    if (field.getAnnotation(Children.class) == null) {
+                        child.addError("Field annotated with @%s must also be annotated with @%s.", Executed.class.getSimpleName(), Children.class.getSimpleName());
+                    }
+                }
+            }
+        }
+
+        NodeChildData many = null;
+        Set<String> names = new HashSet<>();
+        for (NodeChildData child : executedFieldChildren) {
+            if (child.needsGeneratedField()) {
+                throw new AssertionError("Should not need generated field.");
+            }
+            if (names.contains(child.getName())) {
+                child.addError("Field annotated with @%s has duplicate name '%s'. " +
+                                "Executed children must have unique names.", Executed.class.getSimpleName(), child.getName());
+            } else if (many != null) {
+                child.addError("Field annotated with @%s is hidden by executed field '%s'. " +
+                                "Executed child fields with multiple children hide all following executed child declarations. " +
+                                "Reorder or remove this executed child declaration.", Executed.class.getSimpleName(), many.getName());
+            } else if (child.getCardinality().isMany()) {
+                many = child;
+            }
+            names.add(child.getName());
+        }
+
+        List<NodeChildData> nodeChildren = new ArrayList<>();
         List<TypeElement> typeHierarchyReversed = new ArrayList<>(typeHierarchy);
         Collections.reverse(typeHierarchyReversed);
         for (TypeElement type : typeHierarchyReversed) {
             AnnotationMirror nodeChildrenMirror = ElementUtils.findAnnotationMirror(processingEnv, type, NodeChildren.class);
 
             TypeMirror nodeClassType = type.getSuperclass();
-            if (!ElementUtils.isAssignable(nodeClassType, context.getTruffleTypes().getNode())) {
+            if (nodeClassType.getKind() == TypeKind.NONE || !ElementUtils.isAssignable(nodeClassType, context.getTruffleTypes().getNode())) {
                 nodeClassType = null;
             }
 
@@ -595,21 +674,22 @@ public class NodeParser extends AbstractParser<NodeData> {
 
                 Cardinality cardinality = Cardinality.ONE;
 
-                TypeMirror childType = inheritType(childMirror, "type", nodeClassType);
-                if (childType.getKind() == TypeKind.ARRAY) {
+                TypeMirror childNodeType = inheritType(childMirror, "type", nodeClassType);
+                if (childNodeType.getKind() == TypeKind.ARRAY) {
                     cardinality = Cardinality.MANY;
                 }
 
-                TypeMirror originalChildType = childType;
+                TypeMirror originalChildType = childNodeType;
                 TypeMirror castNodeType = castNodeTypes.get(name);
                 if (castNodeType != null) {
-                    childType = castNodeType;
+                    childNodeType = castNodeType;
                 }
 
-                Element getter = findGetter(elements, name, childType);
-                NodeChildData nodeChild = new NodeChildData(type, childMirror, name, childType, originalChildType, getter, cardinality);
+                Element getter = findGetter(elements, name, childNodeType);
+                AnnotationValue executeWith = ElementUtils.getAnnotationValue(childMirror, "executeWith");
+                NodeChildData nodeChild = new NodeChildData(type, childMirror, name, childNodeType, originalChildType, getter, cardinality, executeWith);
 
-                parsedChildren.add(nodeChild);
+                nodeChildren.add(nodeChild);
 
                 if (nodeChild.getNodeType() == null) {
                     nodeChild.addError("No valid node type could be resoleved.");
@@ -622,17 +702,25 @@ public class NodeParser extends AbstractParser<NodeData> {
             }
         }
 
-        List<NodeChildData> filteredChildren = new ArrayList<>();
-        Set<String> encounteredNames = new HashSet<>();
-        for (int i = parsedChildren.size() - 1; i >= 0; i--) {
-            NodeChildData child = parsedChildren.get(i);
-            if (!encounteredNames.contains(child.getName())) {
-                filteredChildren.add(0, child);
-                encounteredNames.add(child.getName());
+        if (!nodeChildren.isEmpty() && !executedFieldChildren.isEmpty()) {
+            node.addError("The use of @%s and @%s at the same time is not supported.", NodeChild.class.getSimpleName(), Executed.class.getSimpleName());
+            return executedFieldChildren;
+        } else if (!executedFieldChildren.isEmpty()) {
+            return executedFieldChildren;
+        } else {
+            List<NodeChildData> filteredChildren = new ArrayList<>();
+            Set<String> encounteredNames = new HashSet<>();
+            for (int i = nodeChildren.size() - 1; i >= 0; i--) {
+                NodeChildData child = nodeChildren.get(i);
+                if (!encounteredNames.contains(child.getName())) {
+                    filteredChildren.add(0, child);
+                    encounteredNames.add(child.getName());
+                }
             }
+
+            return filteredChildren;
         }
 
-        return filteredChildren;
     }
 
     private List<NodeExecutionData> parseExecutions(List<NodeFieldData> fields, List<NodeChildData> children, List<? extends Element> elements) {
@@ -848,35 +936,18 @@ public class NodeParser extends AbstractParser<NodeData> {
 
     }
 
+    @SuppressWarnings("unchecked")
     private void initializeChildren(NodeData node) {
-        initializeExecuteWith(node);
-
         for (NodeChildData child : node.getChildren()) {
-            TypeMirror nodeType = child.getNodeType();
-            NodeData fieldNodeData = parseChildNodeData(node, child, ElementUtils.fromTypeMirror(nodeType));
+            AnnotationValue executeWithValue1 = child.getExecuteWithValue();
 
-            child.setNode(fieldNodeData);
-            if (fieldNodeData == null || fieldNodeData.hasErrors()) {
-                child.addError("Node type '%s' is invalid or not a subclass of Node.", ElementUtils.getQualifiedName(nodeType));
-            } else {
-                List<ExecutableTypeData> types = child.findGenericExecutableTypes(context);
-                if (types.isEmpty()) {
-                    AnnotationValue executeWithValue = ElementUtils.getAnnotationValue(child.getMessageAnnotation(), "executeWith");
-                    child.addError(executeWithValue, "No generic execute method found with %s evaluated arguments for node type %s and frame types %s.", child.getExecuteWith().size(),
-                                    ElementUtils.getSimpleName(nodeType), ElementUtils.getUniqueIdentifiers(createAllowedChildFrameTypes(node)));
-                }
-            }
-        }
-    }
-
-    private static void initializeExecuteWith(NodeData node) {
-        for (NodeChildData child : node.getChildren()) {
-            List<String> executeWithStrings = ElementUtils.getAnnotationValueList(String.class, child.getMessageAnnotation(), "executeWith");
-            AnnotationValue executeWithValue = ElementUtils.getAnnotationValue(child.getMessageAnnotation(), "executeWith");
+            List<AnnotationValue> executeWithValues = ElementUtils.resolveAnnotationValue(List.class, executeWithValue1);
             List<NodeExecutionData> executeWith = new ArrayList<>();
-            for (String executeWithString : executeWithStrings) {
+            for (AnnotationValue executeWithValue : executeWithValues) {
+                String executeWithString = ElementUtils.resolveAnnotationValue(String.class, executeWithValue);
+
                 if (child.getName().equals(executeWithString)) {
-                    child.addError(executeWithValue, "The child node '%s' cannot be executed with itself.", executeWithString);
+                    child.addError(executeWithValue1, "The child node '%s' cannot be executed with itself.", executeWithString);
                     continue;
                 }
                 NodeExecutionData found = null;
@@ -893,16 +964,34 @@ public class NodeParser extends AbstractParser<NodeData> {
                 }
 
                 if (found == null) {
-                    child.addError(executeWithValue, "The child node '%s' cannot be executed with '%s'. The child node was not found.", child.getName(), executeWithString);
+                    child.addError(executeWithValue1, "The child node '%s' cannot be executed with '%s'. The child node was not found.", child.getName(), executeWithString);
                     continue;
                 } else if (!before) {
-                    child.addError(executeWithValue, "The child node '%s' cannot be executed with '%s'. The node %s is executed after the current node.", child.getName(), executeWithString,
+                    child.addError(executeWithValue1, "The child node '%s' cannot be executed with '%s'. The node %s is executed after the current node.", child.getName(), executeWithString,
                                     executeWithString);
                     continue;
                 }
                 executeWith.add(found);
             }
+
             child.setExecuteWith(executeWith);
+        }
+
+        for (NodeChildData child : node.getChildren()) {
+            TypeMirror nodeType = child.getNodeType();
+            NodeData fieldNodeData = parseChildNodeData(node, child, ElementUtils.fromTypeMirror(nodeType));
+
+            child.setNode(fieldNodeData);
+            if (fieldNodeData == null || fieldNodeData.hasErrors()) {
+                child.addError("Node type '%s' is invalid or not a subclass of Node.", ElementUtils.getQualifiedName(nodeType));
+            } else {
+                List<ExecutableTypeData> types = child.findGenericExecutableTypes(context);
+                if (types.isEmpty()) {
+                    AnnotationValue executeWithValue = child.getExecuteWithValue();
+                    child.addError(executeWithValue, "No generic execute method found with %s evaluated arguments for node type %s and frame types %s.", child.getExecuteWith().size(),
+                                    ElementUtils.getSimpleName(nodeType), ElementUtils.getUniqueIdentifiers(createAllowedChildFrameTypes(node)));
+                }
+            }
         }
     }
 
@@ -1510,6 +1599,7 @@ public class NodeParser extends AbstractParser<NodeData> {
             if (!genericParameter.getSpecification().isSignature()) {
                 polymorphicType = genericParameter.getType();
             } else {
+                NodeExecutionData execution = genericParameter.getSpecification().getExecution();
                 Collection<TypeMirror> usedTypes = new HashSet<>();
                 for (SpecializationData specialization : node.getSpecializations()) {
                     if (specialization.isUninitialized()) {
@@ -1522,6 +1612,15 @@ public class NodeParser extends AbstractParser<NodeData> {
                     if (parameter == null) {
                         throw new AssertionError("Parameter existed in generic specialization but not in specialized. param = " + genericParameter.getLocalName());
                     }
+                    if (isReturnParameter && specialization.hasUnexpectedResultRewrite()) {
+                        if (!ElementUtils.isSubtypeBoxed(context, context.getType(Object.class), node.getGenericType(execution))) {
+                            specialization.addError("Implicit 'Object' return type from UnexpectedResultException not compatible with generic type '%s'.", node.getGenericType(execution));
+                        } else {
+                            // if any specialization throws UnexpectedResultException, Object could
+                            // be returned
+                            usedTypes.add(context.getType(Object.class));
+                        }
+                    }
                     usedTypes.add(parameter.getType());
                 }
                 usedTypes = ElementUtils.uniqueSortedTypes(usedTypes, false);
@@ -1532,7 +1631,6 @@ public class NodeParser extends AbstractParser<NodeData> {
                     polymorphicType = ElementUtils.getCommonSuperType(context, usedTypes);
                 }
 
-                NodeExecutionData execution = genericParameter.getSpecification().getExecution();
                 if (execution != null && !ElementUtils.isSubtypeBoxed(context, polymorphicType, node.getGenericType(execution))) {
                     throw new AssertionError(String.format("Polymorphic types %s not compatible to generic type %s.", polymorphicType, node.getGenericType(execution)));
                 }
@@ -1667,6 +1765,55 @@ public class NodeParser extends AbstractParser<NodeData> {
                 }
             }
         }
+    }
+
+    private static void verifyFrame(NodeData node) {
+        final List<NodeExecutionData> childExecutions = node.getChildExecutions();
+        final ExecutableTypeData[] requiresFrameParameter = new ExecutableTypeData[childExecutions.size()];
+        boolean needsCheck = false;
+        for (int i = 0; i < childExecutions.size(); i++) {
+            final NodeChildData childExecution = childExecutions.get(i).getChild();
+            if (childExecution != null) {
+                for (ExecutableTypeData executable : childExecution.getNodeData().getExecutableTypes()) {
+                    if (executable.getFrameParameter() != null) {
+                        requiresFrameParameter[i] = executable;
+                        needsCheck = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if (needsCheck) {
+            for (ExecutableTypeData executable : node.getExecutableTypes()) {
+                if (executable.getFrameParameter() == null) {
+                    for (int executionIndex = executable.getEvaluatedCount(); executionIndex < node.getExecutionCount(); executionIndex++) {
+                        if (requiresFrameParameter[executionIndex] != null) {
+                            node.addError(String.format(
+                                            "Child execution method: %s called from method: %s requires a frame parameter.",
+                                            createMethodSignature(requiresFrameParameter[executionIndex].getMethod()),
+                                            createMethodSignature(executable.getMethod())));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private static String createMethodSignature(final ExecutableElement method) {
+        final StringBuilder result = new StringBuilder();
+        result.append(ElementUtils.getSimpleName(method.getReturnType())).append(' ').append(ElementUtils.getSimpleName((TypeElement) method.getEnclosingElement())).append("::").append(
+                        method.getSimpleName()).append('(');
+        boolean first = true;
+        for (VariableElement parameter : method.getParameters()) {
+            if (first) {
+                first = false;
+            } else {
+                result.append(", ");
+            }
+            result.append(ElementUtils.getSimpleName(parameter.asType()));
+        }
+        result.append(')');
+        return result.toString();
     }
 
     private static void verifyConstructors(NodeData nodeData) {

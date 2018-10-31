@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -31,6 +33,8 @@ import java.lang.annotation.Annotation;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.net.URI;
+import java.net.URISyntaxException;
+import java.net.URL;
 import java.nio.channels.ClosedByInterruptException;
 import java.nio.file.FileSystem;
 import java.nio.file.FileSystems;
@@ -51,6 +55,7 @@ import java.util.TreeSet;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
 import org.graalvm.collections.EconomicSet;
@@ -63,7 +68,8 @@ import com.oracle.svm.core.util.VMError;
 
 public final class ImageClassLoader {
 
-    private static final int CLASS_LENGTH = ".class".length();
+    private static final String CLASS_EXTENSION = ".class";
+    private static final int CLASS_EXTENSION_LENGTH = CLASS_EXTENSION.length();
     private static final int CLASS_LOADING_TIMEOUT_IN_MINUTES = 10;
 
     static {
@@ -91,10 +97,13 @@ public final class ImageClassLoader {
         ArrayList<String> classpathFiltered = new ArrayList<>(classpathAll.length);
         classpathFiltered.addAll(Arrays.asList(classpathAll));
 
-        /* The Graal SDK is on the boot class path, and it contains annotated types. */
-        for (String s : System.getProperty("sun.boot.class.path").split(File.pathSeparator)) {
-            if (s.contains("graal-sdk")) {
-                classpathFiltered.add(s);
+        /* If the Graal SDK is on the boot class path, and it contains annotated types. */
+        final String sunBootClassPath = System.getProperty("sun.boot.class.path");
+        if (sunBootClassPath != null) {
+            for (String s : sunBootClassPath.split(File.pathSeparator)) {
+                if (s.contains("graal-sdk")) {
+                    classpathFiltered.add(s);
+                }
             }
         }
 
@@ -107,34 +116,56 @@ public final class ImageClassLoader {
         try {
             return p.toRealPath();
         } catch (IOException e) {
-            throw VMError.shouldNotReachHere("Path.toRealPath failed for " + p);
+            throw VMError.shouldNotReachHere("Path.toRealPath failed for " + p, e);
         }
     }
 
     private void initAllClasses() {
         final ForkJoinPool executor = new ForkJoinPool(Runtime.getRuntime().availableProcessors());
 
-        Set<Path> uniquePaths = new TreeSet<>(Comparator.comparing(t -> toRealPath(t)));
-        uniquePaths.addAll(Arrays.stream(classpath).map(Paths::get).collect(Collectors.toList()));
+        Set<Path> uniquePaths = new TreeSet<>(Comparator.comparing(ImageClassLoader::toRealPath));
+        uniquePaths.addAll(
+                        Arrays.stream(classpath)
+                                        .flatMap(ImageClassLoader::toClassPathEntries)
+                                        .collect(Collectors.toList()));
         uniquePaths.parallelStream().forEach(path -> loadClassesFromPath(executor, path));
 
         executor.awaitQuiescence(CLASS_LOADING_TIMEOUT_IN_MINUTES, TimeUnit.MINUTES);
     }
 
+    static Stream<Path> toClassPathEntries(String classPathEntry) {
+        Path entry = Paths.get(classPathEntry);
+        if (entry.getFileName() != null && entry.getFileName().toString().endsWith("*")) {
+            return Arrays.stream(entry.getParent().toFile().listFiles()).filter(File::isFile).map(File::toPath);
+        }
+        return Stream.of(entry);
+    }
+
+    private static Set<Path> excludeDirectories = getExcludeDirectories();
+
+    private static Set<Path> getExcludeDirectories() {
+        Path root = Paths.get("/");
+        return Arrays.asList("dev", "sys", "proc", "etc", "var", "tmp", "boot", "lost+found")
+                        .stream().map(root::resolve).collect(Collectors.toSet());
+    }
+
     private void loadClassesFromPath(ForkJoinPool executor, Path path) {
         if (Files.exists(path)) {
-            if (path.getFileName().toString().endsWith(".jar")) {
+            if (Files.isRegularFile(path)) {
                 try {
-                    try (FileSystem jarFileSystem = FileSystems.newFileSystem(URI.create("jar:file:" + path), Collections.emptyMap())) {
-                        initAllClasses(jarFileSystem.getPath("/"), executor);
+                    URI jarURI = new URI("jar:" + path.toAbsolutePath().toUri());
+                    try (FileSystem jarFileSystem = FileSystems.newFileSystem(jarURI, Collections.emptyMap())) {
+                        initAllClasses(jarFileSystem.getPath("/"), Collections.emptySet(), executor);
                     }
                 } catch (ClosedByInterruptException ignored) {
                     throw new InterruptImageBuilding();
                 } catch (IOException e) {
                     throw shouldNotReachHere(e);
+                } catch (URISyntaxException e) {
+                    throw shouldNotReachHere(e);
                 }
             } else {
-                initAllClasses(path, executor);
+                initAllClasses(path, excludeDirectories, executor);
             }
         }
     }
@@ -169,14 +200,26 @@ public final class ImageClassLoader {
         /* we ignore class loading errors due to incomplete paths that people often have */
     }
 
-    private void initAllClasses(final Path root, ForkJoinPool executor) {
+    private void initAllClasses(final Path root, Set<Path> excludes, ForkJoinPool executor) {
         FileVisitor<Path> visitor = new SimpleFileVisitor<Path>() {
             @Override
+            public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
+                if (excludes.contains(dir)) {
+                    return FileVisitResult.SKIP_SUBTREE;
+                }
+                return super.preVisitDirectory(dir, attrs);
+            }
+
+            @Override
             public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                if (excludes.contains(file.getParent())) {
+                    return FileVisitResult.SKIP_SIBLINGS;
+                }
                 executor.execute(() -> {
-                    String fileName = root.relativize(file).toString().replace('/', '.');
-                    if (fileName.endsWith(".class")) {
-                        String className = fileName.substring(0, fileName.length() - CLASS_LENGTH);
+                    String fileName = root.relativize(file).toString();
+                    if (fileName.endsWith(CLASS_EXTENSION)) {
+                        String unversionedClassName = unversionedFileName(fileName);
+                        String className = curtail(unversionedClassName, CLASS_EXTENSION_LENGTH).replace('/', '.');
                         try {
                             Class<?> systemClass = Class.forName(className, false, classLoader);
                             if (includedInPlatform(systemClass)) {
@@ -198,6 +241,35 @@ public final class ImageClassLoader {
                 /* Silently ignore inaccessible files or directories. */
                 return FileVisitResult.CONTINUE;
             }
+
+            /**
+             * Take a file name from a possibly-multi-versioned jar file and remove the versioning
+             * information. See https://docs.oracle.com/javase/9/docs/api/java/util/jar/JarFile.html
+             * for the specification of the versioning strings.
+             *
+             * Then, depend on the JDK class loading mechanism to prefer the appropriately-versioned
+             * class when the class is loaded. The same class name be loaded multiple times, but
+             * each request will return the same appropriately-versioned class. If a
+             * higher-versioned class is not available in a lower-versioned JDK, a
+             * ClassNotFoundException will be thrown, which will be handled appropriately.
+             */
+            private String unversionedFileName(String fileName) {
+                final String versionedPrefix = "META-INF/versions/";
+                final String versionedSuffix = "/";
+                String result = fileName;
+                if (fileName.startsWith(versionedPrefix)) {
+                    final int versionedSuffixIndex = fileName.indexOf(versionedSuffix, versionedPrefix.length());
+                    if (versionedSuffixIndex >= 0) {
+                        result = fileName.substring(versionedSuffixIndex + versionedSuffix.length());
+                    }
+                }
+                return result;
+            }
+
+            /** Remove the requested number of characters from the tail of the given string. */
+            private String curtail(String str, int tailLength) {
+                return str.substring(0, str.length() - tailLength);
+            }
         };
 
         try {
@@ -218,7 +290,11 @@ public final class ImageClassLoader {
         return true;
     }
 
-    public InputStream findResourceByName(String resource) {
+    public URL findResourceByName(String resource) {
+        return classLoader.getResource(resource);
+    }
+
+    public InputStream findResourceAsStreamByName(String resource) {
         return classLoader.getResourceAsStream(resource);
     }
 

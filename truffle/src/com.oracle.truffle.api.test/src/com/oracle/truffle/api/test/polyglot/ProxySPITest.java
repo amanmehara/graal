@@ -1,33 +1,49 @@
 /*
- * Copyright (c) 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api.test.polyglot;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.function.Function;
 
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Value;
@@ -37,108 +53,88 @@ import org.graalvm.polyglot.proxy.ProxyExecutable;
 import org.graalvm.polyglot.proxy.ProxyInstantiable;
 import org.graalvm.polyglot.proxy.ProxyNativeObject;
 import org.graalvm.polyglot.proxy.ProxyObject;
-import org.graalvm.polyglot.proxy.ProxyPrimitive;
 import org.junit.Assert;
+import org.junit.Before;
 import org.junit.Test;
 
 import com.oracle.truffle.api.TruffleException;
+import com.oracle.truffle.api.interop.ArityException;
 import com.oracle.truffle.api.interop.ForeignAccess;
 import com.oracle.truffle.api.interop.InteropException;
 import com.oracle.truffle.api.interop.KeyInfo;
 import com.oracle.truffle.api.interop.Message;
-import com.oracle.truffle.api.interop.MessageResolution;
-import com.oracle.truffle.api.interop.Resolve;
 import com.oracle.truffle.api.interop.TruffleObject;
 import com.oracle.truffle.api.interop.UnknownIdentifierException;
 import com.oracle.truffle.api.interop.UnsupportedMessageException;
-import com.oracle.truffle.api.interop.java.JavaInterop;
-import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.test.polyglot.ContextAPITestLanguage.LanguageContext;
+import com.oracle.truffle.api.interop.UnsupportedTypeException;
 
 /**
  * Testing the behavior of proxies towards languages.
  */
-public class ProxySPITest {
+public class ProxySPITest extends AbstractPolyglotTest {
 
-    static LanguageContext langContext;
+    static class TestFunction extends ProxyInteropObject {
 
-    @MessageResolution(receiverType = TestFunction.class)
-    static class TestFunction implements TruffleObject {
+        TruffleObject lastFunction;
 
-        private final Function<TruffleObject, Object> f;
-
-        TestFunction(Function<TruffleObject, Object> f) {
-            this.f = f;
+        @Override
+        public boolean isExecutable() {
+            return true;
         }
 
-        public ForeignAccess getForeignAccess() {
-            return TestFunctionForeign.ACCESS;
-        }
-
-        static boolean isInstance(TruffleObject obj) {
-            return obj instanceof TestFunction;
-        }
-
-        @Resolve(message = "EXECUTE")
-        public abstract static class ExecuteNode extends Node {
-            Object access(TestFunction receiver, Object[] arguments) {
-                Object firstArg = arguments.length > 0 ? arguments[0] : null;
-                Object result = receiver.f.apply((TruffleObject) firstArg);
-                if (result == null) {
-                    return "null";
-                }
-                return result;
-            }
+        @Override
+        public Object execute(Object[] arguments) throws UnsupportedTypeException, ArityException, UnsupportedMessageException {
+            lastFunction = (TruffleObject) arguments[0];
+            return lastFunction;
         }
 
     }
 
-    private static Value eval(Context context, Proxy proxy, Function<TruffleObject, Object> f) {
-        ProxySPITestLanguage.runinside = (env) -> new TestFunction(f);
-        try {
-            Value proxyFunction = context.eval(ProxySPITestLanguage.ID, "");
-            return proxyFunction.execute(proxy);
-        } finally {
-            ProxySPITestLanguage.runinside = null;
-        }
+    @Before
+    public void before() {
+        setupEnv(Context.create());
+    }
+
+    private TruffleObject toInnerProxy(Proxy proxy) {
+        TestFunction f = new TestFunction();
+        context.asValue(f).execute(proxy);
+        return f.lastFunction;
     }
 
     @Test
     public void testSimpleProxy() throws Throwable {
-        Context context = Context.create();
         Proxy proxyOuter = new Proxy() {
         };
-        eval(context, proxyOuter, (proxyInner) -> {
-            assertUnsupported(Message.createExecute(0), proxyInner);
-            assertUnsupported(Message.AS_POINTER, proxyInner);
-            assertUnsupported(Message.GET_SIZE, proxyInner);
-            assertEmpty(Message.KEYS, proxyInner);
-            assertUnsupported(Message.READ, proxyInner);
-            assertUnsupported(Message.WRITE, proxyInner);
-            assertUnsupported(Message.REMOVE, proxyInner);
-            assertUnsupported(Message.TO_NATIVE, proxyInner);
-            assertUnsupported(Message.UNBOX, proxyInner);
-            assertUnsupported(Message.createInvoke(0), proxyInner);
-            assertUnsupported(Message.createExecute(0), proxyInner);
-            assertUnsupported(Message.createNew(0), proxyInner);
-            assertEquals(false, Message.IS_BOXED, proxyInner);
-            assertEquals(false, Message.IS_EXECUTABLE, proxyInner);
-            assertEquals(false, Message.IS_INSTANTIABLE, proxyInner);
-            assertEquals(false, Message.IS_NULL, proxyInner);
-            assertEquals(false, Message.HAS_KEYS, proxyInner);
-            assertEquals(false, Message.HAS_SIZE, proxyInner);
-            assertEquals(false, Message.IS_POINTER, proxyInner);
-            assertEquals(0, Message.KEY_INFO, proxyInner);
-            return null;
-        });
+        TruffleObject proxyInner = toInnerProxy(proxyOuter);
+
+        assertUnsupported(Message.EXECUTE, proxyInner);
+        assertUnsupported(Message.AS_POINTER, proxyInner);
+        assertUnsupported(Message.GET_SIZE, proxyInner);
+        assertEmpty(Message.KEYS, proxyInner);
+        assertUnsupported(Message.READ, proxyInner);
+        assertUnsupported(Message.WRITE, proxyInner);
+        assertUnsupported(Message.REMOVE, proxyInner);
+        assertUnsupported(Message.TO_NATIVE, proxyInner);
+        assertUnsupported(Message.UNBOX, proxyInner);
+        assertUnsupported(Message.INVOKE, proxyInner);
+        assertUnsupported(Message.EXECUTE, proxyInner);
+        assertUnsupported(Message.NEW, proxyInner);
+        assertEquals(false, Message.IS_BOXED, proxyInner);
+        assertEquals(false, Message.IS_EXECUTABLE, proxyInner);
+        assertEquals(false, Message.IS_INSTANTIABLE, proxyInner);
+        assertEquals(false, Message.IS_NULL, proxyInner);
+        assertEquals(false, Message.HAS_KEYS, proxyInner);
+        assertEquals(false, Message.HAS_SIZE, proxyInner);
+        assertEquals(false, Message.IS_POINTER, proxyInner);
+        assertEquals(0, Message.KEY_INFO, proxyInner);
     }
 
-    private static final int EXISTING_KEY = KeyInfo.newBuilder().setReadable(true).setWritable(true).build();
-    private static final int NO_KEY = 0;
+    private static final int EXISTING_KEY = KeyInfo.READABLE | KeyInfo.MODIFIABLE | KeyInfo.REMOVABLE;
+    private static final int NO_KEY = KeyInfo.INSERTABLE;
 
     @Test
     public void testArrayProxy() throws Throwable {
-        Context context = Context.create();
+
         final int size = 42;
         ProxyArray proxyOuter = new ProxyArray() {
             int[] array = new int[size];
@@ -158,108 +154,107 @@ public class ProxySPITest {
                 return size;
             }
         };
-        eval(context, proxyOuter, (proxyInner) -> {
-            assertEquals(size, Message.GET_SIZE, proxyInner);
-            for (int i = 0; i < size; i++) {
-                assertEquals(42, Message.READ, proxyInner, i);
-            }
-            for (int i = 0; i < size; i++) {
-                assertEquals(41, Message.WRITE, proxyInner, i, 41);
-            }
-            for (int i = 0; i < size; i++) {
-                assertEquals(41, Message.READ, proxyInner, i);
-            }
-            assertUnknownIdentifier(Message.READ, proxyInner, 42);
-            assertUnknownIdentifier(Message.READ, proxyInner, -1);
-            assertUnknownIdentifier(Message.READ, proxyInner, Integer.MAX_VALUE);
-            assertUnknownIdentifier(Message.READ, proxyInner, Integer.MIN_VALUE);
-            assertEquals(true, Message.HAS_SIZE, proxyInner);
+        TruffleObject proxyInner = toInnerProxy(proxyOuter);
 
-            assertEquals(EXISTING_KEY, Message.KEY_INFO, proxyInner, 41);
-            assertEquals(NO_KEY, Message.KEY_INFO, proxyInner, 42);
+        assertEquals(size, Message.GET_SIZE, proxyInner);
+        for (int i = 0; i < size; i++) {
+            assertEquals(42, Message.READ, proxyInner, i);
+        }
+        for (int i = 0; i < size; i++) {
+            assertEquals(41, Message.WRITE, proxyInner, i, 41);
+        }
+        for (int i = 0; i < size; i++) {
+            assertEquals(41, Message.READ, proxyInner, i);
+        }
+        assertUnknownIdentifier(Message.READ, proxyInner, 42);
+        assertUnknownIdentifier(Message.READ, proxyInner, -1);
+        assertUnknownIdentifier(Message.READ, proxyInner, Integer.MAX_VALUE);
+        assertUnknownIdentifier(Message.READ, proxyInner, Integer.MIN_VALUE);
+        assertEquals(true, Message.HAS_SIZE, proxyInner);
 
-            assertUnsupported(Message.createExecute(0), proxyInner);
-            assertUnsupported(Message.AS_POINTER, proxyInner);
-            assertEquals(false, Message.HAS_KEYS, proxyInner);
-            assertEmpty(Message.KEYS, proxyInner);
-            assertUnsupported(Message.READ, proxyInner, "");
-            assertUnsupported(Message.WRITE, proxyInner, "");
-            assertUnsupported(Message.TO_NATIVE, proxyInner);
-            assertUnsupported(Message.UNBOX, proxyInner);
-            assertUnsupported(Message.createInvoke(0), proxyInner);
-            assertUnsupported(Message.createExecute(0), proxyInner);
-            assertUnsupported(Message.createNew(0), proxyInner);
-            assertEquals(false, Message.IS_BOXED, proxyInner);
-            assertEquals(false, Message.IS_EXECUTABLE, proxyInner);
-            assertEquals(false, Message.IS_INSTANTIABLE, proxyInner);
-            assertEquals(false, Message.IS_NULL, proxyInner);
-            assertEquals(false, Message.IS_POINTER, proxyInner);
-            assertEquals(0, Message.KEY_INFO, proxyInner);
-            return null;
-        });
+        assertEquals(EXISTING_KEY, Message.KEY_INFO, proxyInner, 41);
+        assertEquals(NO_KEY, Message.KEY_INFO, proxyInner, 42);
+
+        assertUnsupported(Message.EXECUTE, proxyInner);
+        assertUnsupported(Message.AS_POINTER, proxyInner);
+        assertEquals(false, Message.HAS_KEYS, proxyInner);
+        assertEmpty(Message.KEYS, proxyInner);
+        assertUnsupported(Message.READ, proxyInner, "");
+        assertUnsupported(Message.WRITE, proxyInner, "");
+        assertUnsupported(Message.TO_NATIVE, proxyInner);
+        assertUnsupported(Message.UNBOX, proxyInner);
+        assertUnsupported(Message.INVOKE, proxyInner);
+        assertUnsupported(Message.EXECUTE, proxyInner);
+        assertUnsupported(Message.NEW, proxyInner);
+        assertEquals(false, Message.IS_BOXED, proxyInner);
+        assertEquals(false, Message.IS_EXECUTABLE, proxyInner);
+        assertEquals(false, Message.IS_INSTANTIABLE, proxyInner);
+        assertEquals(false, Message.IS_NULL, proxyInner);
+        assertEquals(false, Message.IS_POINTER, proxyInner);
+        assertEquals(0, Message.KEY_INFO, proxyInner);
     }
 
     @Test
     public void testArrayElementRemove() throws Throwable {
-        Context context = Context.create();
+
         final int size = 42;
         ArrayList<Object> list = new ArrayList<>();
         for (int i = 0; i < size; i++) {
             list.add(i);
         }
         ProxyArray proxyOuter = ProxyArray.fromList(list);
-        eval(context, proxyOuter, (proxyInner) -> {
-            assertEquals(size, Message.GET_SIZE, proxyInner);
-            assertEquals(true, Message.REMOVE, proxyInner, 10);
-            assertEquals(size - 1, Message.GET_SIZE, proxyInner);
-            return null;
-        });
+
+        TruffleObject proxyInner = toInnerProxy(proxyOuter);
+
+        assertEquals(size, Message.GET_SIZE, proxyInner);
+        assertEquals(true, Message.REMOVE, proxyInner, 10);
+        assertEquals(size - 1, Message.GET_SIZE, proxyInner);
     }
 
     @Test
     public void testProxyObject() throws Throwable {
-        Context context = Context.create();
+
         Map<String, Object> values = new HashMap<>();
         ProxyObject proxyOuter = ProxyObject.fromMap(values);
-        eval(context, proxyOuter, (proxyInner) -> {
-            assertEquals(true, Message.HAS_KEYS, proxyInner);
-            assertEmpty(Message.KEYS, proxyInner);
 
-            assertUnknownIdentifier(Message.READ, proxyInner, "");
-            assertEquals(NO_KEY, Message.KEY_INFO, proxyInner, "");
+        TruffleObject proxyInner = toInnerProxy(proxyOuter);
 
-            assertEquals(42, Message.WRITE, proxyInner, "a", 42);
-            assertEquals(42, Message.READ, proxyInner, "a");
-            assertEquals(EXISTING_KEY, Message.KEY_INFO, proxyInner, "a");
-            assertEquals(NO_KEY, Message.KEY_INFO, proxyInner, "");
+        assertEquals(true, Message.HAS_KEYS, proxyInner);
+        assertEmpty(Message.KEYS, proxyInner);
 
-            assertUnsupported(Message.createExecute(0), proxyInner);
-            assertUnsupported(Message.GET_SIZE, proxyInner);
-            assertUnsupported(Message.READ, proxyInner, 0);
-            assertUnsupported(Message.WRITE, proxyInner, 1);
-            assertUnsupported(Message.UNBOX, proxyInner);
-            assertUnsupported(Message.TO_NATIVE, proxyInner);
-            assertUnsupported(Message.AS_POINTER, proxyInner);
-            assertUnsupported(Message.createInvoke(0), proxyInner);
-            assertUnsupported(Message.createExecute(0), proxyInner);
-            assertUnsupported(Message.createNew(0), proxyInner);
-            assertEquals(false, Message.IS_BOXED, proxyInner);
-            assertEquals(false, Message.IS_EXECUTABLE, proxyInner);
-            assertEquals(false, Message.IS_INSTANTIABLE, proxyInner);
-            assertEquals(false, Message.IS_NULL, proxyInner);
-            assertEquals(false, Message.HAS_SIZE, proxyInner);
-            assertEquals(false, Message.IS_POINTER, proxyInner);
-            assertEquals(0, Message.KEY_INFO, proxyInner);
+        assertUnknownIdentifier(Message.READ, proxyInner, "");
+        assertEquals(NO_KEY, Message.KEY_INFO, proxyInner, "");
 
-            assertEquals(true, Message.REMOVE, proxyInner, "a");
-            assertEmpty(Message.KEYS, proxyInner);
-            return null;
-        });
+        assertEquals(42, Message.WRITE, proxyInner, "a", 42);
+        assertEquals(42, Message.READ, proxyInner, "a");
+        assertEquals(EXISTING_KEY, Message.KEY_INFO, proxyInner, "a");
+        assertEquals(NO_KEY, Message.KEY_INFO, proxyInner, "");
+
+        assertUnsupported(Message.EXECUTE, proxyInner);
+        assertUnsupported(Message.GET_SIZE, proxyInner);
+        assertUnsupported(Message.READ, proxyInner, 0);
+        assertUnsupported(Message.WRITE, proxyInner, 1);
+        assertUnsupported(Message.UNBOX, proxyInner);
+        assertUnsupported(Message.TO_NATIVE, proxyInner);
+        assertUnsupported(Message.AS_POINTER, proxyInner);
+        assertUnsupported(Message.INVOKE, proxyInner);
+        assertUnsupported(Message.EXECUTE, proxyInner);
+        assertUnsupported(Message.NEW, proxyInner);
+        assertEquals(false, Message.IS_BOXED, proxyInner);
+        assertEquals(false, Message.IS_EXECUTABLE, proxyInner);
+        assertEquals(false, Message.IS_INSTANTIABLE, proxyInner);
+        assertEquals(false, Message.IS_NULL, proxyInner);
+        assertEquals(false, Message.HAS_SIZE, proxyInner);
+        assertEquals(false, Message.IS_POINTER, proxyInner);
+        assertEquals(0, Message.KEY_INFO, proxyInner);
+
+        assertEquals(true, Message.REMOVE, proxyInner, "a");
+        assertEmpty(Message.KEYS, proxyInner);
     }
 
     @Test
     public void testProxyObjectUnsupported() throws Throwable {
-        Context context = Context.create();
+
         ProxyObject proxyOuter = new ProxyObject() {
 
             public void putMember(String key, Value value) {
@@ -278,169 +273,161 @@ public class ProxySPITest {
                 throw new UnsupportedOperationException();
             }
         };
-        eval(context, proxyOuter, (proxyInner) -> {
-            assertEmpty(Message.KEYS, proxyInner);
-            assertUnsupported(Message.READ, proxyInner, "");
-            assertUnsupported(Message.WRITE, proxyInner, "", 42);
-            assertUnsupported(Message.createExecute(0), proxyInner);
-            assertUnsupported(Message.GET_SIZE, proxyInner);
-            assertUnsupported(Message.READ, proxyInner, 0);
-            assertUnsupported(Message.WRITE, proxyInner, 1);
-            assertUnsupported(Message.UNBOX, proxyInner);
-            assertUnsupported(Message.TO_NATIVE, proxyInner);
-            assertUnsupported(Message.AS_POINTER, proxyInner);
-            assertUnsupported(Message.createInvoke(0), proxyInner);
-            assertUnsupported(Message.createExecute(0), proxyInner);
-            assertUnsupported(Message.createNew(0), proxyInner);
-            assertEquals(false, Message.IS_BOXED, proxyInner);
-            assertEquals(false, Message.IS_EXECUTABLE, proxyInner);
-            assertEquals(false, Message.IS_INSTANTIABLE, proxyInner);
-            assertEquals(false, Message.IS_NULL, proxyInner);
-            assertEquals(true, Message.HAS_KEYS, proxyInner);
-            assertEquals(false, Message.HAS_SIZE, proxyInner);
-            assertEquals(false, Message.IS_POINTER, proxyInner);
-            assertEquals(0, Message.KEY_INFO, proxyInner);
-            return null;
-        });
+
+        TruffleObject proxyInner = toInnerProxy(proxyOuter);
+
+        assertEmpty(Message.KEYS, proxyInner);
+        assertUnsupported(Message.READ, proxyInner, "");
+        assertUnsupported(Message.WRITE, proxyInner, "", 42);
+        assertUnsupported(Message.EXECUTE, proxyInner);
+        assertUnsupported(Message.GET_SIZE, proxyInner);
+        assertUnsupported(Message.READ, proxyInner, 0);
+        assertUnsupported(Message.WRITE, proxyInner, 1);
+        assertUnsupported(Message.UNBOX, proxyInner);
+        assertUnsupported(Message.TO_NATIVE, proxyInner);
+        assertUnsupported(Message.AS_POINTER, proxyInner);
+        assertUnsupported(Message.INVOKE, proxyInner);
+        assertUnsupported(Message.EXECUTE, proxyInner);
+        assertUnsupported(Message.NEW, proxyInner);
+        assertEquals(false, Message.IS_BOXED, proxyInner);
+        assertEquals(false, Message.IS_EXECUTABLE, proxyInner);
+        assertEquals(false, Message.IS_INSTANTIABLE, proxyInner);
+        assertEquals(false, Message.IS_NULL, proxyInner);
+        assertEquals(true, Message.HAS_KEYS, proxyInner);
+        assertEquals(false, Message.HAS_SIZE, proxyInner);
+        assertEquals(false, Message.IS_POINTER, proxyInner);
+        assertEquals(0, Message.KEY_INFO, proxyInner);
     }
 
     @Test
+    @SuppressWarnings("deprecation")
     public void testProxyPrimitive() throws Throwable {
-        Context context = Context.create();
-        ProxyPrimitive proxyOuter = new ProxyPrimitive() {
+
+        org.graalvm.polyglot.proxy.ProxyPrimitive proxyOuter = new org.graalvm.polyglot.proxy.ProxyPrimitive() {
             public Object asPrimitive() {
                 return 42;
             }
         };
-        eval(context, proxyOuter, (proxyInner) -> {
-            assertEquals(true, Message.IS_BOXED, proxyInner);
-            assertEquals(42, Message.UNBOX, proxyInner);
 
-            assertUnsupported(Message.createExecute(0), proxyInner);
-            assertUnsupported(Message.AS_POINTER, proxyInner);
-            assertUnsupported(Message.GET_SIZE, proxyInner);
-            assertEmpty(Message.KEYS, proxyInner);
-            assertUnsupported(Message.READ, proxyInner);
-            assertUnsupported(Message.WRITE, proxyInner);
-            assertUnsupported(Message.TO_NATIVE, proxyInner);
-            assertUnsupported(Message.createInvoke(0), proxyInner);
-            assertUnsupported(Message.createExecute(0), proxyInner);
-            assertUnsupported(Message.createNew(0), proxyInner);
-            assertEquals(false, Message.IS_EXECUTABLE, proxyInner);
-            assertEquals(false, Message.IS_INSTANTIABLE, proxyInner);
-            assertEquals(false, Message.IS_NULL, proxyInner);
-            assertEquals(false, Message.HAS_KEYS, proxyInner);
-            assertEquals(false, Message.HAS_SIZE, proxyInner);
-            assertEquals(false, Message.IS_POINTER, proxyInner);
-            assertEquals(0, Message.KEY_INFO, proxyInner);
-            return null;
-        });
+        TruffleObject proxyInner = toInnerProxy(proxyOuter);
+
+        assertEquals(true, Message.IS_BOXED, proxyInner);
+        assertEquals(42, Message.UNBOX, proxyInner);
+
+        assertUnsupported(Message.EXECUTE, proxyInner);
+        assertUnsupported(Message.AS_POINTER, proxyInner);
+        assertUnsupported(Message.GET_SIZE, proxyInner);
+        assertEmpty(Message.KEYS, proxyInner);
+        assertUnsupported(Message.READ, proxyInner);
+        assertUnsupported(Message.WRITE, proxyInner);
+        assertUnsupported(Message.TO_NATIVE, proxyInner);
+        assertUnsupported(Message.INVOKE, proxyInner);
+        assertUnsupported(Message.EXECUTE, proxyInner);
+        assertUnsupported(Message.NEW, proxyInner);
+        assertEquals(false, Message.IS_EXECUTABLE, proxyInner);
+        assertEquals(false, Message.IS_INSTANTIABLE, proxyInner);
+        assertEquals(false, Message.IS_NULL, proxyInner);
+        assertEquals(false, Message.HAS_KEYS, proxyInner);
+        assertEquals(false, Message.HAS_SIZE, proxyInner);
+        assertEquals(false, Message.IS_POINTER, proxyInner);
+        assertEquals(0, Message.KEY_INFO, proxyInner);
     }
 
     @Test
     public void testProxyNativeObject() throws Throwable {
-        Context context = Context.create();
+
         ProxyNativeObject proxyOuter = new ProxyNativeObject() {
             public long asPointer() {
                 return 42;
             }
         };
-        eval(context, proxyOuter, (proxyInner) -> {
-            assertEquals(true, Message.IS_POINTER, proxyInner);
-            assertEquals(42L, Message.AS_POINTER, proxyInner);
 
-            assertUnsupported(Message.createExecute(0), proxyInner);
-            assertUnsupported(Message.UNBOX, proxyInner);
-            assertUnsupported(Message.GET_SIZE, proxyInner);
-            assertEmpty(Message.KEYS, proxyInner);
-            assertUnsupported(Message.READ, proxyInner);
-            assertUnsupported(Message.WRITE, proxyInner);
-            assertUnsupported(Message.TO_NATIVE, proxyInner);
-            assertUnsupported(Message.UNBOX, proxyInner);
-            assertUnsupported(Message.createInvoke(0), proxyInner);
-            assertUnsupported(Message.createExecute(0), proxyInner);
-            assertUnsupported(Message.createNew(0), proxyInner);
-            assertEquals(false, Message.IS_EXECUTABLE, proxyInner);
-            assertEquals(false, Message.IS_INSTANTIABLE, proxyInner);
-            assertEquals(false, Message.IS_NULL, proxyInner);
-            assertEquals(false, Message.HAS_KEYS, proxyInner);
-            assertEquals(false, Message.HAS_SIZE, proxyInner);
-            assertEquals(false, Message.IS_BOXED, proxyInner);
-            assertEquals(0, Message.KEY_INFO, proxyInner);
-            return null;
-        });
+        TruffleObject proxyInner = toInnerProxy(proxyOuter);
+
+        assertEquals(true, Message.IS_POINTER, proxyInner);
+        assertEquals(42L, Message.AS_POINTER, proxyInner);
+
+        assertUnsupported(Message.EXECUTE, proxyInner);
+        assertUnsupported(Message.UNBOX, proxyInner);
+        assertUnsupported(Message.GET_SIZE, proxyInner);
+        assertEmpty(Message.KEYS, proxyInner);
+        assertUnsupported(Message.READ, proxyInner);
+        assertUnsupported(Message.WRITE, proxyInner);
+        assertUnsupported(Message.TO_NATIVE, proxyInner);
+        assertUnsupported(Message.UNBOX, proxyInner);
+        assertUnsupported(Message.INVOKE, proxyInner);
+        assertUnsupported(Message.EXECUTE, proxyInner);
+        assertUnsupported(Message.NEW, proxyInner);
+        assertEquals(false, Message.IS_EXECUTABLE, proxyInner);
+        assertEquals(false, Message.IS_INSTANTIABLE, proxyInner);
+        assertEquals(false, Message.IS_NULL, proxyInner);
+        assertEquals(false, Message.HAS_KEYS, proxyInner);
+        assertEquals(false, Message.HAS_SIZE, proxyInner);
+        assertEquals(false, Message.IS_BOXED, proxyInner);
+        assertEquals(0, Message.KEY_INFO, proxyInner);
     }
 
     @Test
     public void testProxyExecutable() throws Throwable {
-        Context context = Context.create();
+
         ProxyExecutable proxyOuter = new ProxyExecutable() {
             public Object execute(Value... t) {
                 return t[0].asInt();
             }
         };
-        eval(context, proxyOuter, (proxyInner) -> {
-            assertEquals(true, Message.IS_EXECUTABLE, proxyInner);
-            assertEquals(42, Message.createExecute(0), proxyInner, 42);
-            assertUnsupported(Message.createNew(0), proxyInner, 42);
+        TruffleObject proxyInner = toInnerProxy(proxyOuter);
 
-            assertUnsupported(Message.AS_POINTER, proxyInner);
-            assertUnsupported(Message.GET_SIZE, proxyInner);
-            assertEmpty(Message.KEYS, proxyInner);
-            assertUnsupported(Message.READ, proxyInner);
-            assertUnsupported(Message.WRITE, proxyInner);
-            assertUnsupported(Message.TO_NATIVE, proxyInner);
-            assertUnsupported(Message.UNBOX, proxyInner);
-            assertUnsupported(Message.createInvoke(0), proxyInner);
-            assertEquals(false, Message.IS_INSTANTIABLE, proxyInner);
-            assertEquals(false, Message.IS_BOXED, proxyInner);
-            assertEquals(false, Message.IS_NULL, proxyInner);
-            assertEquals(false, Message.HAS_KEYS, proxyInner);
-            assertEquals(false, Message.HAS_SIZE, proxyInner);
-            assertEquals(false, Message.IS_POINTER, proxyInner);
-            assertEquals(0, Message.KEY_INFO, proxyInner);
-            return null;
-        });
+        assertEquals(true, Message.IS_EXECUTABLE, proxyInner);
+        assertEquals(42, Message.EXECUTE, proxyInner, 42);
+        assertUnsupported(Message.NEW, proxyInner, 42);
+
+        assertUnsupported(Message.AS_POINTER, proxyInner);
+        assertUnsupported(Message.GET_SIZE, proxyInner);
+        assertEmpty(Message.KEYS, proxyInner);
+        assertUnsupported(Message.READ, proxyInner);
+        assertUnsupported(Message.WRITE, proxyInner);
+        assertUnsupported(Message.TO_NATIVE, proxyInner);
+        assertUnsupported(Message.UNBOX, proxyInner);
+        assertUnsupported(Message.INVOKE, proxyInner);
+        assertEquals(false, Message.IS_INSTANTIABLE, proxyInner);
+        assertEquals(false, Message.IS_BOXED, proxyInner);
+        assertEquals(false, Message.IS_NULL, proxyInner);
+        assertEquals(false, Message.HAS_KEYS, proxyInner);
+        assertEquals(false, Message.HAS_SIZE, proxyInner);
+        assertEquals(false, Message.IS_POINTER, proxyInner);
+        assertEquals(0, Message.KEY_INFO, proxyInner);
     }
 
     @Test
     public void testProxyInstantiable() throws Throwable {
-        Context context = Context.create();
+
         ProxyInstantiable proxyOuter = new ProxyInstantiable() {
             @Override
             public Object newInstance(Value... t) {
                 return t[0].newInstance();
             }
         };
-        eval(context, proxyOuter, (proxyInner) -> {
-            assertEquals(true, Message.IS_INSTANTIABLE, proxyInner);
-            assertEquals(false, Message.IS_EXECUTABLE, proxyInner);
 
-            try {
-                TruffleObject dateTruffleObject = (TruffleObject) ForeignAccess.send(Message.createNew(0).createNode(), proxyInner, JavaInterop.asTruffleObject(Date.class));
-                Date date = (Date) JavaInterop.asJavaObject(dateTruffleObject);
-                Assert.assertNotNull(date);
-            } catch (InteropException ex) {
-                Assert.fail(ex.getLocalizedMessage());
-            }
-            assertUnsupported(Message.createExecute(0), proxyInner, 42);
+        TruffleObject proxyInner = toInnerProxy(proxyOuter);
 
-            assertUnsupported(Message.AS_POINTER, proxyInner);
-            assertUnsupported(Message.GET_SIZE, proxyInner);
-            assertEmpty(Message.KEYS, proxyInner);
-            assertUnsupported(Message.READ, proxyInner);
-            assertUnsupported(Message.WRITE, proxyInner);
-            assertUnsupported(Message.TO_NATIVE, proxyInner);
-            assertUnsupported(Message.UNBOX, proxyInner);
-            assertUnsupported(Message.createInvoke(0), proxyInner);
-            assertEquals(false, Message.IS_BOXED, proxyInner);
-            assertEquals(false, Message.IS_NULL, proxyInner);
-            assertEquals(false, Message.HAS_KEYS, proxyInner);
-            assertEquals(false, Message.HAS_SIZE, proxyInner);
-            assertEquals(false, Message.IS_POINTER, proxyInner);
-            assertEquals(0, Message.KEY_INFO, proxyInner);
-            return null;
-        });
+        assertEquals(true, Message.IS_INSTANTIABLE, proxyInner);
+        assertEquals(false, Message.IS_EXECUTABLE, proxyInner);
+
+        assertUnsupported(Message.EXECUTE, proxyInner, 42);
+        assertUnsupported(Message.AS_POINTER, proxyInner);
+        assertUnsupported(Message.GET_SIZE, proxyInner);
+        assertEmpty(Message.KEYS, proxyInner);
+        assertUnsupported(Message.READ, proxyInner);
+        assertUnsupported(Message.WRITE, proxyInner);
+        assertUnsupported(Message.TO_NATIVE, proxyInner);
+        assertUnsupported(Message.UNBOX, proxyInner);
+        assertUnsupported(Message.INVOKE, proxyInner);
+        assertEquals(false, Message.IS_BOXED, proxyInner);
+        assertEquals(false, Message.IS_NULL, proxyInner);
+        assertEquals(false, Message.HAS_KEYS, proxyInner);
+        assertEquals(false, Message.HAS_SIZE, proxyInner);
+        assertEquals(false, Message.IS_POINTER, proxyInner);
+        assertEquals(0, Message.KEY_INFO, proxyInner);
     }
 
     @SuppressWarnings("serial")
@@ -452,7 +439,8 @@ public class ProxySPITest {
 
     }
 
-    private static class AllProxy implements ProxyArray, ProxyObject, ProxyPrimitive, ProxyNativeObject, ProxyExecutable, ProxyInstantiable {
+    @SuppressWarnings("deprecation")
+    private static class AllProxy implements ProxyArray, ProxyObject, org.graalvm.polyglot.proxy.ProxyPrimitive, ProxyNativeObject, ProxyExecutable, ProxyInstantiable {
 
         public Object execute(Value... t) {
             throw new TestError();
@@ -513,33 +501,33 @@ public class ProxySPITest {
 
     @Test
     public void testProxyError() throws Throwable {
-        Context context = Context.create();
+
         Proxy proxyOuter = new AllProxy();
-        eval(context, proxyOuter, (proxyInner) -> {
-            assertHostError(Message.AS_POINTER, proxyInner);
-            assertHostError(Message.GET_SIZE, proxyInner);
-            assertHostError(Message.KEYS, proxyInner);
-            assertHostError(Message.READ, proxyInner, "");
-            assertHostError(Message.READ, proxyInner, 42);
-            assertHostError(Message.WRITE, proxyInner, "", 42);
-            assertHostError(Message.WRITE, proxyInner, 42, 42);
-            assertHostError(Message.REMOVE, proxyInner, 10);
-            assertHostError(Message.UNBOX, proxyInner);
-            assertHostError(Message.createInvoke(0), proxyInner, "");
-            assertHostError(Message.createExecute(0), proxyInner);
-            assertHostError(Message.createNew(0), proxyInner);
-            assertHostError(Message.KEY_INFO, proxyInner, "");
-            assertHostError(Message.KEY_INFO, proxyInner, 42);
-            assertUnsupported(Message.TO_NATIVE, proxyInner);
-            assertEquals(true, Message.IS_BOXED, proxyInner);
-            assertEquals(true, Message.IS_EXECUTABLE, proxyInner);
-            assertEquals(true, Message.IS_INSTANTIABLE, proxyInner);
-            assertEquals(false, Message.IS_NULL, proxyInner);
-            assertEquals(true, Message.HAS_KEYS, proxyInner);
-            assertEquals(true, Message.HAS_SIZE, proxyInner);
-            assertEquals(true, Message.IS_POINTER, proxyInner);
-            return null;
-        });
+
+        TruffleObject proxyInner = toInnerProxy(proxyOuter);
+
+        assertHostError(Message.AS_POINTER, proxyInner);
+        assertHostError(Message.GET_SIZE, proxyInner);
+        assertHostError(Message.KEYS, proxyInner);
+        assertHostError(Message.READ, proxyInner, "");
+        assertHostError(Message.READ, proxyInner, 42);
+        assertHostError(Message.WRITE, proxyInner, "", 42);
+        assertHostError(Message.WRITE, proxyInner, 42, 42);
+        assertHostError(Message.REMOVE, proxyInner, 10);
+        assertHostError(Message.UNBOX, proxyInner);
+        assertHostError(Message.INVOKE, proxyInner, "");
+        assertHostError(Message.EXECUTE, proxyInner);
+        assertHostError(Message.NEW, proxyInner);
+        assertHostError(Message.KEY_INFO, proxyInner, "");
+        assertHostError(Message.KEY_INFO, proxyInner, 42);
+        assertUnsupported(Message.TO_NATIVE, proxyInner);
+        assertEquals(true, Message.IS_BOXED, proxyInner);
+        assertEquals(true, Message.IS_EXECUTABLE, proxyInner);
+        assertEquals(true, Message.IS_INSTANTIABLE, proxyInner);
+        assertEquals(false, Message.IS_NULL, proxyInner);
+        assertEquals(true, Message.HAS_KEYS, proxyInner);
+        assertEquals(true, Message.HAS_SIZE, proxyInner);
+        assertEquals(true, Message.IS_POINTER, proxyInner);
     }
 
     private static void assertEmpty(Message message, TruffleObject proxyInner) {
@@ -560,7 +548,7 @@ public class ProxySPITest {
         }
     }
 
-    private static void assertHostError(Message message, TruffleObject proxyInner, Object... args) {
+    private void assertHostError(Message message, TruffleObject proxyInner, Object... args) {
         try {
             ForeignAccess.send(message.createNode(), proxyInner, args);
             Assert.fail();
@@ -573,7 +561,7 @@ public class ProxySPITest {
             TruffleException te = (TruffleException) e;
             Assert.assertFalse(te.isInternalError());
             Assert.assertEquals("Host Error", ((Exception) e).getMessage());
-            Assert.assertTrue(e.getCause() instanceof TestError);
+            Assert.assertTrue(languageEnv.asHostException(e) instanceof TestError);
         }
     }
 

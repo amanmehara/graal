@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -28,6 +30,7 @@ import java.util.List;
 import org.graalvm.nativeimage.Feature;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
+import org.graalvm.nativeimage.ProcessProperties;
 
 import com.oracle.svm.core.CompilerCommandPlugin;
 import com.oracle.svm.core.annotate.AutomaticFeature;
@@ -44,9 +47,7 @@ public class LinuxExecutableName extends PosixExecutableName {
      */
     @Override
     public Object apply(Object[] args) {
-        final String exefileString = "/proc/self/exe";
-        final String result = realpath(exefileString);
-        return result;
+        return ProcessProperties.getExecutableName();
     }
 
     @AutomaticFeature

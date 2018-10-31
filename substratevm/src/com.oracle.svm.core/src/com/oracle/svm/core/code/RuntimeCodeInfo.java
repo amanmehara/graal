@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -35,7 +37,6 @@ import org.graalvm.word.UnsignedWord;
 import com.oracle.svm.core.MemoryWalker;
 import com.oracle.svm.core.annotate.AutomaticFeature;
 import com.oracle.svm.core.annotate.Uninterruptible;
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.deopt.Deoptimizer;
 import com.oracle.svm.core.deopt.SubstrateInstalledCode;
 import com.oracle.svm.core.heap.Heap;
@@ -73,6 +74,14 @@ public class RuntimeCodeInfo {
 
     @Platforms(Platform.HOSTED_ONLY.class)
     public RuntimeCodeInfo() {
+    }
+
+    /** Tear down the heap, return all allocated virtual memory chunks to VirtualMemoryProvider. */
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public final void tearDown() {
+        for (int i = 0; i < numMethods; i++) {
+            methodInfos[i].freeInstalledCode();
+        }
     }
 
     protected RuntimeMethodInfo lookupMethod(CodePointer ip) {
@@ -199,6 +208,16 @@ public class RuntimeCodeInfo {
          * table.
          */
         methodInfos = newMethodInfos;
+
+        if (oldMethodInfos != null) {
+            /*
+             * The old array is in a pinned chunk that probably still contains metadata for other
+             * methods that are still alive. So even though we release our allocator, the old array
+             * is not garbage collected any time soon. By clearing the object array, we make sure
+             * that we do not keep objects alive unnecessarily.
+             */
+            Arrays.fill(oldMethodInfos, null);
+        }
     }
 
     protected void invalidateMethod(RuntimeMethodInfo methodInfo) {
@@ -264,7 +283,7 @@ public class RuntimeCodeInfo {
         }
 
         methodInfo.allocator.release();
-        ConfigurationValues.getOSInterface().freeVirtualMemory(methodInfo.getCodeStart(), methodInfo.getCodeSize());
+        methodInfo.freeInstalledCode();
 
         if (Options.TraceCodeCache.getValue()) {
             logTable();

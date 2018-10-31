@@ -1,28 +1,47 @@
 /*
- * Copyright (c) 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.dsl.processor.model;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
@@ -40,7 +59,6 @@ import com.oracle.truffle.dsl.processor.model.NodeChildData.Cardinality;
 public class NodeData extends Template implements Comparable<NodeData> {
 
     private final String nodeId;
-    private final String shortName;
     private final List<NodeData> enclosingNodes = new ArrayList<>();
     private NodeData declaringNode;
 
@@ -61,21 +79,22 @@ public class NodeData extends Template implements Comparable<NodeData> {
     private TypeMirror frameType;
     private boolean reflectable;
 
-    public NodeData(ProcessorContext context, TypeElement type, String shortName, TypeSystemData typeSystem, boolean generateFactory) {
+    private boolean reportPolymorphism;
+
+    public NodeData(ProcessorContext context, TypeElement type, TypeSystemData typeSystem, boolean generateFactory) {
         super(context, type, null);
         this.nodeId = ElementUtils.getSimpleName(type);
-        this.shortName = shortName;
         this.typeSystem = typeSystem;
         this.fields = new ArrayList<>();
         this.children = new ArrayList<>();
         this.childExecutions = new ArrayList<>();
-        this.thisExecution = new NodeExecutionData(new NodeChildData(null, null, "this", getNodeType(), getNodeType(), null, Cardinality.ONE), -1, -1);
+        this.thisExecution = new NodeExecutionData(new NodeChildData(null, null, "this", getNodeType(), getNodeType(), null, Cardinality.ONE, null), -1, -1);
         this.thisExecution.getChild().setNode(this);
         this.generateFactory = generateFactory;
     }
 
     public NodeData(ProcessorContext context, TypeElement type) {
-        this(context, type, null, null, false);
+        this(context, type, null, false);
     }
 
     public boolean isGenerateFactory() {
@@ -173,10 +192,6 @@ public class NodeData extends Template implements Comparable<NodeData> {
         return casts;
     }
 
-    public String getShortName() {
-        return shortName;
-    }
-
     public List<NodeFieldData> getFields() {
         return fields;
     }
@@ -271,7 +286,7 @@ public class NodeData extends Template implements Comparable<NodeData> {
         }
 
         for (NodeExecutionData execution : childExecutions) {
-            if (execution.getName().equals(childName) && (execution.getChildIndex() == -1 || execution.getChildIndex() == index)) {
+            if (execution.getName().equals(childName) && (execution.getChildArrayIndex() == -1 || execution.getChildArrayIndex() == index)) {
                 return execution;
             }
         }
@@ -581,7 +596,14 @@ public class NodeData extends Template implements Comparable<NodeData> {
             }
         }
 
-        return ElementUtils.uniqueSortedTypes(types, false);
+        return Arrays.asList(ElementUtils.getCommonSuperType(ProcessorContext.getInstance(), types));
     }
 
+    public void setReportPolymorphism(boolean report) {
+        this.reportPolymorphism = report;
+    }
+
+    public boolean isReportPolymorphism() {
+        return reportPolymorphism;
+    }
 }

@@ -1,26 +1,42 @@
 /*
- * Copyright (c) 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api.debug;
 
@@ -66,6 +82,10 @@ final class ObjectStructures {
             return null;
         }
         return new ObjectList(nodes, object);
+    }
+
+    static boolean canExecute(MessageNodes nodes, TruffleObject object) {
+        return ForeignAccess.sendIsExecutable(nodes.isExecutable, object);
     }
 
     private static class ObjectMap extends AbstractMap<Object, Object> {
@@ -153,7 +173,7 @@ final class ObjectStructures {
                     } catch (UnknownIdentifierException | UnsupportedMessageException ex) {
                         throw ex.raise();
                     }
-                    return new TruffleEntry(key);
+                    return new TruffleEntry(nodes, object, key);
                 }
 
                 @Override
@@ -163,38 +183,42 @@ final class ObjectStructures {
 
             }
         }
+    }
 
-        private final class TruffleEntry implements Entry<Object, Object> {
-            private final Object key;
+    static final class TruffleEntry implements Map.Entry<Object, Object> {
 
-            TruffleEntry(Object key) {
-                this.key = key;
+        private final MessageNodes nodes;
+        private final TruffleObject object;
+        private final Object key;
+
+        TruffleEntry(MessageNodes nodes, TruffleObject object, Object key) {
+            this.nodes = nodes;
+            this.object = object;
+            this.key = key;
+        }
+
+        @Override
+        public Object getKey() {
+            return key;
+        }
+
+        @Override
+        public Object getValue() {
+            try {
+                return ForeignAccess.sendRead(nodes.read, object, key);
+            } catch (UnknownIdentifierException | UnsupportedMessageException ex) {
+                throw ex.raise();
             }
+        }
 
-            @Override
-            public Object getKey() {
-                return key;
+        @Override
+        public Object setValue(Object value) {
+            try {
+                ForeignAccess.sendWrite(nodes.write, object, key, value);
+            } catch (UnknownIdentifierException | UnsupportedMessageException | UnsupportedTypeException ex) {
+                throw ex.raise();
             }
-
-            @Override
-            public Object getValue() {
-                try {
-                    return ForeignAccess.sendRead(nodes.read, object, key);
-                } catch (UnknownIdentifierException | UnsupportedMessageException ex) {
-                    throw ex.raise();
-                }
-            }
-
-            @Override
-            public Object setValue(Object value) {
-                Object prev = getValue();
-                try {
-                    ForeignAccess.sendWrite(nodes.write, object, key, value);
-                } catch (UnknownIdentifierException | UnsupportedMessageException | UnsupportedTypeException ex) {
-                    throw ex.raise();
-                }
-                return prev;
-            }
+            return null;
         }
     }
 
@@ -248,6 +272,10 @@ final class ObjectStructures {
         final Node getSize;
         final Node read;
         final Node write;
+        final Node isBoxed;
+        final Node unbox;
+        final Node isExecutable;
+        final Node invoke1;
 
         MessageNodes() {
             keyInfo = Message.KEY_INFO.createNode();
@@ -256,6 +284,10 @@ final class ObjectStructures {
             getSize = Message.GET_SIZE.createNode();
             read = Message.READ.createNode();
             write = Message.WRITE.createNode();
+            isBoxed = Message.IS_BOXED.createNode();
+            unbox = Message.UNBOX.createNode();
+            isExecutable = Message.IS_EXECUTABLE.createNode();
+            invoke1 = Message.INVOKE.createNode();
         }
     }
 }

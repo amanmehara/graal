@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -43,6 +43,7 @@ package com.oracle.truffle.sl.nodes.call;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.instrumentation.StandardTags;
+import com.oracle.truffle.api.instrumentation.Tag;
 import com.oracle.truffle.api.nodes.ExplodeLoop;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import com.oracle.truffle.sl.nodes.SLExpressionNode;
@@ -89,10 +90,11 @@ public final class SLInvokeNode extends SLExpressionNode {
     }
 
     @Override
-    protected boolean isTaggedWith(Class<?> tag) {
+    public boolean hasTag(Class<? extends Tag> tag) {
         if (tag == StandardTags.CallTag.class) {
             return true;
         }
-        return super.isTaggedWith(tag);
+        return super.hasTag(tag);
     }
+
 }

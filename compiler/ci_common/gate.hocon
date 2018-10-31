@@ -1,6 +1,9 @@
 gateCmdSuffix : ["-v", "--kill-with-sigquit", "gate", "--strict-mode", "--extra-vm-argument=-Dgraal.DumpOnError=true -Dgraal.PrintGraphFile=true", "--extra-vm-argument=${EXTRA_VM_ARGS}", "--tags"]
 gateCmd : ["mx", "--strict-compliance"] ${gateCmdSuffix}
 
+graalWeekly: ${graal-weekly-notifications} {
+  targets: ["weekly"]
+}
 gateTest : {
   environment : {
     EXTRA_VM_ARGS : ""
@@ -8,6 +11,42 @@ gateTest : {
   run : [
     ${gateCmd} ["build,test"]
   ]
+}
+
+gateCoverage : {
+  environment : {
+    EXTRA_VM_ARGS : ""
+  }
+  run : [
+    ${gateCmd} ["build,coverage", --jacoco-zip, report.zip]
+  ]
+}
+
+gateJavaBaseTest : {
+  environment : {
+    EXTRA_VM_ARGS : ""
+  }
+  run : [
+    ${gateCmd} ["build,javabasetest"]
+  ]
+}
+
+gateTestMaxVS : ${gateTest} {
+  environment : {
+    EXTRA_VM_ARGS : "-Dgraal.DetailedAsserts=true -XX:MaxVectorSize=16"
+  }
+}
+
+gateTestAVX0 : ${gateTest} {
+  environment : {
+    EXTRA_VM_ARGS : "-XX:UseAVX=0"
+  }
+}
+
+gateTestAVX1 : ${gateTest} {
+  environment : {
+    EXTRA_VM_ARGS : "-XX:UseAVX=1"
+  }
 }
 
 gateTestCTW : {
@@ -90,6 +129,13 @@ gateSolarisSPARC : ${solaris-sparcv9} ${gateCommon}
 
 gateLinuxSPARC : ${linux-sparcv9} ${gateCommon}
 
+gateLinuxAArch64 : ${linux-aarch64} ${gateCommon} {
+  downloads : {
+    JAVA_HOME : ${jdks.oraclejdkSNAPSHOT}
+    EXTRA_JAVA_HOMES : {pathlist :[ ${jdks.labsjdk8} ]}
+  }
+}
+
 gateLinuxAMD64TraceRA : ${gateLinuxAMD64} {
   environment : {
     EXTRA_VM_ARGS : "-Dgraal.TraceRA=true"
@@ -106,6 +152,15 @@ gateLinuxAMD64TraceRASingleBlock : ${gateLinuxAMD64} {
   environment : {
     EXTRA_VM_ARGS : "-Dgraal.TraceRA=true -Dgraal.TraceRAPolicy=BottomUpOnly -Dgraal.TraceBuilding=SingleBlock"
   }
+}
+
+gateJAOTC : {
+  environment : {
+    EXTRA_VM_ARGS : ""
+  }
+  run : [
+    ${gateCmd} ["build,jaotc"]
+  ]
 }
 
 gateLinuxAMD64Bootstrap : ${gateLinuxAMD64} { capabilities : ${gateLinuxAMD64.capabilities} [manycores] }

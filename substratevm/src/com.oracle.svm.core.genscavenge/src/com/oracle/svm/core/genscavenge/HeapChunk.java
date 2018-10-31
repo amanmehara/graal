@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,6 +24,7 @@
  */
 package com.oracle.svm.core.genscavenge;
 
+import org.graalvm.compiler.word.Word;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.c.struct.RawField;
@@ -34,7 +37,10 @@ import org.graalvm.word.UnsignedWord;
 import com.oracle.svm.core.MemoryWalker;
 import com.oracle.svm.core.annotate.Uninterruptible;
 import com.oracle.svm.core.c.struct.PinnedObjectField;
+import com.oracle.svm.core.heap.Heap;
+import com.oracle.svm.core.heap.ObjectHeader;
 import com.oracle.svm.core.heap.ObjectVisitor;
+import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.LayoutEncoding;
 import com.oracle.svm.core.log.Log;
 
@@ -161,11 +167,12 @@ public class HeapChunk {
 
     /** Apply an ObjectVisitor to all the Objects in the given HeapChunk. */
     public static boolean walkObjectsFrom(Header<?> that, Pointer offset, ObjectVisitor visitor) {
-        final Log trace = Log.noopLog().string("[HeapChunk.visitObjectsFrom:");
+        final Log trace = Log.noopLog().string("[HeapChunk.walkObjectsFrom:");
         trace.string("  that: ").hex(that).string("  offset: ").hex(offset).string("  getTop(): ").hex(that.getTop());
         /* Get the Object at the offset, or null. */
         Object obj = (offset.belowThan(that.getTop()) ? offset.toObject() : null);
         while (obj != null) {
+            assert walkObjectsFromAssert(obj, that, offset) : "HeapChunk.walkObjectsFrom: hub fails to verify.";
             trace.newline().string("  o: ").object(obj).newline();
             if (!visitor.visitObjectInline(obj)) {
                 trace.string("  visitObject fails").string("  returns false").string("]").newline();
@@ -175,6 +182,25 @@ public class HeapChunk {
             obj = getNextObject(that, obj);
         }
         trace.string("  returns true").string("]").newline();
+        return true;
+    }
+
+    /** Assert that the hub of obj is well-formed. For GR-9912. */
+    private static boolean walkObjectsFromAssert(Object obj, Header<?> that, Pointer offset) {
+        if (GCImpl.runtimeAssertions() && !HeapImpl.getHeapImpl().assertHubOfObject(obj)) {
+            final Log failureLog = Log.log().string("[HeapChunk.walkObjectsFromAssert:").indent(true);
+            failureLog.string("  that: ").hex(that).newline()
+                            .string("  offset: ").hex(offset).newline()
+                            .string("  getTop: ").hex(that.getTop()).newline()
+                            .string("  obj: ").hex(Word.objectToUntrackedPointer(obj)).newline();
+            final UnsignedWord header = ObjectHeader.readHeaderFromObject(obj);
+            final DynamicHub hub = ObjectHeader.dynamicHubFromObjectHeader(header);
+            failureLog.string("  header: ").hex(header)
+                            .string("  hub: ").hex(Word.objectToUntrackedPointer(hub))
+                            .string("  headerBits: ").string(Heap.getHeap().getObjectHeader().toStringFromHeader(header)).newline();
+            failureLog.string("  hub fails to verify.]").indent(false);
+            return false;
+        }
         return true;
     }
 
@@ -213,6 +239,7 @@ public class HeapChunk {
     /**
      * Convenience method: Cast a {@link Header} to a {@link Pointer} to allow address arithmetic.
      */
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     protected static Pointer asPointer(Header<?> that) {
         return (Pointer) that;
     }
@@ -292,7 +319,7 @@ public class HeapChunk {
 
             if (ObjectHeaderImpl.getObjectHeaderImpl().isForwardedHeaderCarefully(header)) {
                 /* Use the forwarded object to get the size. */
-                o = ObjectHeaderImpl.getObjectHeaderImpl().getForwardedObject(header);
+                o = ObjectHeaderImpl.getObjectHeaderImpl().getForwardedObject(p);
             } else {
                 /* Use the object to get the size. */
                 o = p.toObject();

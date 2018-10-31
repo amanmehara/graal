@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -21,12 +23,6 @@
  * questions.
  */
 package org.graalvm.compiler.truffle.common;
-
-import jdk.vm.ci.code.site.DataPatch;
-import jdk.vm.ci.code.site.ExceptionHandler;
-import jdk.vm.ci.code.site.Infopoint;
-import jdk.vm.ci.code.site.InfopointReason;
-import jdk.vm.ci.code.site.Mark;
 
 /**
  * A listener for events related to the compilation of a {@link CompilableTruffleAST}. The events
@@ -69,27 +65,27 @@ public interface TruffleCompilerListener {
         int getTotalFrameSize();
 
         /**
-         * Gets the number of {@link ExceptionHandler}s in the compiled code.
+         * Gets the number of {@code ExceptionHandler}s in the compiled code.
          */
         int getExceptionHandlersCount();
 
         /**
-         * Gets the number of {@link Infopoint}s in the compiled code.
+         * Gets the number of {@code Infopoint}s in the compiled code.
          */
         int getInfopointsCount();
 
         /**
-         * Gets the infopoint {@linkplain InfopointReason reasons} in the compiled code.
+         * Gets the infopoint reasons in the compiled code.
          */
         String[] getInfopoints();
 
         /**
-         * Gets the number of {@link Mark}s in the compiled code.
+         * Gets the number of {@code Mark}s in the compiled code.
          */
         int getMarksCount();
 
         /**
-         * Gets the number of {@link DataPatch}es in the compiled code.
+         * Gets the number of {@code DataPatch}es in the compiled code.
          */
         int getDataPatchesCount();
     }

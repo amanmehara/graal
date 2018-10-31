@@ -1,26 +1,42 @@
 /*
- * Copyright (c) 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package org.graalvm.polyglot;
 
@@ -31,9 +47,36 @@ import org.graalvm.polyglot.impl.AbstractPolyglotImpl.AbstractExceptionImpl;
 import org.graalvm.polyglot.impl.AbstractPolyglotImpl.AbstractStackFrameImpl;
 
 /**
- * An exception caused by executing Graal guest languages. Can originate from a guest or from the
- * host language.
+ * A polyglot exception represents errors that contain Graal guest languages on the stack trace. In
+ * addition to the Java stack trace it also returns a {@link #getPolyglotStackTrace() polyglot stack
+ * trace}. Methods like {@link #printStackTrace()} are implemented such that host and guest language
+ * stack traces are printed nicely.
+ * <p>
+ * A polyglot exception may have the following properties:
+ * <ul>
+ * <li>{@link #isGuestException() Guest Exception}: Is <code>true</code> if the exception was raised
+ * in guest language code.
+ * <li>{@link #isHostException() Host Exception}: Is <code>true</code> if this exception was raised
+ * in host runtime code. This may happen if the polyglot runtime host runtime methods that throw an
+ * exception. The original host exception can be accessed using {@link #asHostException()}.
+ * <li>{@link #isCancelled() Cancelled}: Is <code>true</code> if the execution got cancelled. The
+ * execution may be cancelled when {@link Context#close() closing} a context, by a guest language
+ * intrinsic or by a tool, like the debugger.
+ * <li>{@link #isExit() Exit}: Is <code>true</code> if the execution exited. The guest language
+ * triggers exit events if the guest language code request to exit the VM. The exit status can be
+ * accessed using {@link #getExitStatus()}.
+ * <li>{@link #isSyntaxError() Syntax Error}: Is <code>true</code> if the error represents a syntax
+ * error. For syntax errors a {@link #getSourceLocation() location} may be available.
+ * <li>{@link #isIncompleteSource() Incomplete Source}: Is <code>true</code> if this returns a
+ * {@link #isSyntaxError() syntax error} that indicates that the source is incomplete.
+ * <li>{@link #isInternalError() Internal Error}: Is <code>true</code> if an internal implementation
+ * error occurred in the polyglot runtime, the guest language or an instrument. It is not
+ * recommended to show such errors to the user in production. Please consider filing issues for
+ * internal implementation errors.
+ * </ul>
  *
+ * @see Context
+ * @see Value
  * @since 1.0
  */
 @SuppressWarnings("serial")
@@ -128,6 +171,29 @@ public final class PolyglotException extends RuntimeException {
     }
 
     /**
+     * {@inheritDoc}
+     *
+     * @since 1.0
+     */
+    @Override
+    public boolean equals(Object obj) {
+        if (obj instanceof PolyglotException) {
+            return impl.equals(((PolyglotException) obj).impl);
+        }
+        return false;
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * @since 1.0
+     */
+    @Override
+    public int hashCode() {
+        return impl.hashCode();
+    }
+
+    /**
      * Unsupported, {@link PolyglotException} instances are not writable therefore setting the stack
      * trace has no effect for them.
      *
@@ -182,7 +248,10 @@ public final class PolyglotException extends RuntimeException {
     }
 
     /**
-     * Returns the original Java host exception that caused this exception.
+     * Returns the original Java host exception that caused this exception. The original host
+     * exception contains a stack trace that is hardly interpretable by users as it contains details
+     * of the language implementation. The polyglot exception provides information for user-friendly
+     * error reporting with the {@link #getPolyglotStackTrace() polyglot stack trace}.
      *
      * @throws UnsupportedOperationException if this exception is not a host exception. Call
      *             {@link #isHostException()} to ensure its originating from the host language.
@@ -257,8 +326,8 @@ public final class PolyglotException extends RuntimeException {
     }
 
     /**
-     * Returns an additional guest language object. The value is never <code>null</code> and returns
-     * a Value object where {@link Value#isNull()} returns as true if it is not available.
+     * Returns an additional guest language object. Returns <code>null</code> if no exception object
+     * is available.
      *
      * @since 1.0
      */

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -42,6 +44,7 @@ public class PosixDirectives implements CContext.Directives {
                     "<langinfo.h>",
                     "<limits.h>",
                     "<locale.h>",
+                    "<net/ethernet.h>",
                     "<net/if.h>",
                     "<netdb.h>",
                     "<netinet/in.h>",
@@ -67,7 +70,9 @@ public class PosixDirectives implements CContext.Directives {
                     "<sys/time.h>",
                     "<sys/times.h>",
                     "<sys/uio.h>",
+                    "<sys/utsname.h>",
                     "<sys/wait.h>",
+                    "<termios.h>",
                     "<time.h>",
                     "<unistd.h>",
                     "<zlib.h>"
@@ -78,15 +83,22 @@ public class PosixDirectives implements CContext.Directives {
                     "<sys/event.h>",
                     "<mach/mach_time.h>",
                     "<mach-o/dyld.h>",
-                    "<netinet6/in6_var.h>"
+                    "<netinet6/in6_var.h>",
+                    "<net/if_dl.h>"
     };
 
     private static final String[] linuxLibs = new String[]{
                     "<arpa/inet.h>",
                     "<sys/epoll.h>",
                     "<sys/sendfile.h>",
-                    "<mntent.h>"
+                    "<mntent.h>",
+                    "<link.h>",
     };
+
+    @Override
+    public boolean isInConfiguration() {
+        return Platform.includedIn(Platform.LINUX.class) || Platform.includedIn(Platform.DARWIN.class);
+    }
 
     @Override
     public List<String> getHeaderFiles() {

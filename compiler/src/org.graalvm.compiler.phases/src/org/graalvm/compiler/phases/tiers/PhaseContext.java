@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -30,6 +32,7 @@ import org.graalvm.compiler.phases.util.Providers;
 
 import jdk.vm.ci.meta.ConstantReflectionProvider;
 import jdk.vm.ci.meta.MetaAccessProvider;
+import org.graalvm.compiler.core.common.spi.ForeignCallsProvider;
 
 public class PhaseContext {
 
@@ -39,19 +42,22 @@ public class PhaseContext {
     private final LoweringProvider lowerer;
     private final Replacements replacements;
     private final StampProvider stampProvider;
+    private final ForeignCallsProvider foreignCalls;
 
     public PhaseContext(MetaAccessProvider metaAccess, ConstantReflectionProvider constantReflection, ConstantFieldProvider constantFieldProvider, LoweringProvider lowerer, Replacements replacements,
-                    StampProvider stampProvider) {
+                    StampProvider stampProvider, ForeignCallsProvider foreignCalls) {
         this.metaAccess = metaAccess;
         this.constantReflection = constantReflection;
         this.constantFieldProvider = constantFieldProvider;
         this.lowerer = lowerer;
         this.replacements = replacements;
         this.stampProvider = stampProvider;
+        this.foreignCalls = foreignCalls;
     }
 
     public PhaseContext(Providers providers) {
-        this(providers.getMetaAccess(), providers.getConstantReflection(), providers.getConstantFieldProvider(), providers.getLowerer(), providers.getReplacements(), providers.getStampProvider());
+        this(providers.getMetaAccess(), providers.getConstantReflection(), providers.getConstantFieldProvider(), providers.getLowerer(), providers.getReplacements(), providers.getStampProvider(),
+                        providers.getForeignCalls());
     }
 
     public MetaAccessProvider getMetaAccess() {
@@ -78,4 +84,7 @@ public class PhaseContext {
         return stampProvider;
     }
 
+    public ForeignCallsProvider getForeignCalls() {
+        return foreignCalls;
+    }
 }

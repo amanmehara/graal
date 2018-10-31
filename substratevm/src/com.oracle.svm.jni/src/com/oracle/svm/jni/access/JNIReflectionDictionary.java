@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -104,8 +106,12 @@ public final class JNIReflectionDictionary {
         return nativeLinkages.get(key);
     }
 
-    public Iterable<JNINativeLinkage> getLinkages(String declaringClass) {
-        return () -> nativeLinkages.keySet().stream().filter(l -> declaringClass.equals(l.getDeclaringClassName())).iterator();
+    public void unsetEntryPoints(String declaringClass) {
+        for (JNINativeLinkage linkage : nativeLinkages.keySet()) {
+            if (declaringClass.equals(linkage.getDeclaringClassName())) {
+                linkage.unsetEntryPoint();
+            }
+        }
     }
 
     public JNIMethodId getMethodID(Class<?> classObject, JNIAccessibleMethodDescriptor descriptor, boolean isStatic) {
@@ -135,24 +141,17 @@ public final class JNIReflectionDictionary {
         return (clazz != null) ? clazz.getField(name) : null;
     }
 
-    public JNIFieldId getFieldID(Class<?> clazz, String name, boolean isStatic) {
+    public JNIFieldId getFieldID(Class<?> clazz, String name) {
         JNIAccessibleField field = getField(clazz, name);
-        if (field != null && field.isStatic() == isStatic) {
-            return getFieldID(field);
-        }
-        return Word.nullPointer();
+        return field != null ? field.getId() : WordFactory.zero();
     }
 
-    private static JNIFieldId getFieldID(JNIAccessibleField field) {
-        return WordFactory.pointer((long) field.getOffset());
-    }
-
-    public String getFieldNameByID(Class<?> classObject, JNIFieldId id, boolean isStatic) {
+    public String getFieldNameByID(Class<?> classObject, JNIFieldId id) {
         JNIAccessibleClass clazz = classesByClassObject.get(classObject);
         if (clazz != null) {
             for (Entry<String, JNIAccessibleField> entry : clazz.getFieldsByName().entrySet()) {
                 JNIAccessibleField field = entry.getValue();
-                if (isStatic == field.isStatic() && id.equal(getFieldID(field))) {
+                if (id.equal(field.getId())) {
                     return entry.getKey();
                 }
             }

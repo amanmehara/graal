@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,13 +40,12 @@
  */
 package com.oracle.truffle.sl;
 
-import java.math.BigInteger;
-
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.TruffleException;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import com.oracle.truffle.api.source.SourceSection;
+import com.oracle.truffle.sl.runtime.SLBigNumber;
 import com.oracle.truffle.sl.runtime.SLContext;
 import com.oracle.truffle.sl.runtime.SLFunction;
 import com.oracle.truffle.sl.runtime.SLNull;
@@ -109,7 +108,7 @@ public class SLException extends RuntimeException implements TruffleException {
             Object value = values[i];
             result.append(sep);
             sep = ", ";
-            if (value instanceof Long || value instanceof BigInteger) {
+            if (value instanceof Long || value instanceof SLBigNumber) {
                 result.append("Number ").append(value);
             } else if (value instanceof Boolean) {
                 result.append("Boolean ").append(value);

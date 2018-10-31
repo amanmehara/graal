@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,207 +24,222 @@
  */
 package com.oracle.svm.hosted.config;
 
-// Checkstyle: allow reflection
+import static com.oracle.svm.core.SubstrateOptions.PrintFlags;
 
-import java.io.FileReader;
 import java.io.IOException;
 import java.io.Reader;
 import java.lang.reflect.Executable;
-import java.lang.reflect.Field;
-import java.util.Map.Entry;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import com.oracle.shadowed.com.google.gson.JsonArray;
-import com.oracle.shadowed.com.google.gson.JsonElement;
-import com.oracle.shadowed.com.google.gson.JsonObject;
-import com.oracle.shadowed.com.google.gson.JsonParseException;
-import com.oracle.shadowed.com.google.gson.JsonParser;
-import com.oracle.shadowed.com.google.gson.JsonPrimitive;
-import com.oracle.svm.core.RuntimeReflection.ReflectionRegistry;
+import org.graalvm.nativeimage.impl.ReflectionRegistry;
+
+import com.oracle.svm.core.option.HostedOptionKey;
+import com.oracle.svm.core.option.SubstrateOptionsParser;
+import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.hosted.ImageClassLoader;
+import com.oracle.svm.hosted.json.JSONParser;
+import com.oracle.svm.hosted.json.JSONParserException;
 
 import jdk.vm.ci.meta.MetaUtil;
 
+// Checkstyle: allow reflection
+
 /**
- * Parses a reflection configuration with classes, methods and fields and registers them wth
- * {@link ReflectionRegistry} so they are accessible via JNI at runtime.
+ * Parses JSON describing classes, methods and fields and registers them with a
+ * {@link ReflectionRegistry}.
  */
-public final class ReflectionConfigurationParser {
+public final class ReflectionConfigurationParser extends ConfigurationParser {
     private static final String CONSTRUCTOR_NAME = "<init>";
 
-    private static class ParseContext {
-        String className;
-        String memberName;
-
-        @Override
-        public String toString() {
-            StringBuilder sb = new StringBuilder();
-            if (className != null) {
-                sb.append("class ").append(className).append(": ");
-                if (memberName != null) {
-                    sb.append("member ").append(memberName).append(": ");
-                }
-            }
-            return sb.toString();
-        }
-    }
-
     private final ReflectionRegistry registry;
-    private final ImageClassLoader classLoader;
 
     public ReflectionConfigurationParser(ReflectionRegistry registry, ImageClassLoader classLoader) {
+        super(classLoader);
         this.registry = registry;
-        this.classLoader = classLoader;
     }
 
-    public void parseAndRegister(String file) throws IOException {
-        try (Reader reader = new FileReader(file)) {
-            parseAndRegister(reader);
-        }
-    }
-
-    public void parseAndRegister(Reader reader) {
-        ParseContext context = new ParseContext();
+    @Override
+    protected void parseAndRegister(Reader reader, String featureName, Object location, HostedOptionKey<String[]> option) {
         try {
-            JsonParser parser = new JsonParser();
-            JsonElement root = parser.parse(reader);
-            handleRoot(context, root);
-        } catch (Exception e) {
-            throw new JsonParseException(context.toString() + e.getMessage(), e);
-        }
-    }
-
-    private static JsonParseException bailout(String message) {
-        throw new JsonParseException(message);
-    }
-
-    private static void expectMembers(JsonObject object, String required, String... optionals) {
-        if (!object.has(required)) {
-            throw bailout("missing required element: \"" + required + '"');
-        }
-        for (Entry<String, JsonElement> elements : object.entrySet()) {
-            String elementName = elements.getKey();
-            if (!required.equals(elementName) && Stream.of(optionals).noneMatch(elementName::equals)) {
-                throw bailout("unexpected element: \"" + elementName + "\" (valid elements: \"" + String.join("\", \"", optionals) + "\")");
+            JSONParser parser = new JSONParser(reader);
+            Object json = parser.parse();
+            parseClassArray(asList(json, "first level of document must be an array of class descriptors"));
+        } catch (IOException | JSONParserException e) {
+            String errorMessage = e.getMessage();
+            if (errorMessage == null || errorMessage.isEmpty()) {
+                errorMessage = e.toString();
             }
+            throw UserError.abort("Error parsing " + featureName + " configuration in " + location + ":\n" + errorMessage +
+                            "\nVerify that the configuration matches the schema described in the " +
+                            SubstrateOptionsParser.commandArgument(PrintFlags, "+") + " output for option " + option.getName() + ".");
         }
     }
 
-    private void handleRoot(ParseContext context, JsonElement root) {
-        for (JsonElement classElement : root.getAsJsonArray()) {
-            handleClass(context, classElement);
+    private void parseClassArray(List<Object> classes) {
+        for (Object clazz : classes) {
+            parseClass(asMap(clazz, "second level of document must be class descriptor objects"));
         }
     }
 
-    private void handleClass(ParseContext context, JsonElement classElement) {
-        JsonObject classObject = classElement.getAsJsonObject();
-        String name = classObject.get("name").getAsString();
-        context.className = name;
-        expectMembers(classObject, "name", "methods", "fields", "allDeclaredMethods", "allPublicMethods", "allDeclaredFields", "allPublicFields");
-        Class<?> clazz = classLoader.findClassByName(name, false);
+    private void parseClass(Map<String, Object> data) {
+        Object classObject = data.get("name");
+        if (classObject == null) {
+            throw new JSONParserException("Missing atrribute 'name' in class descriptor object");
+        }
+        String className = asString(classObject, "name");
+
+        Class<?> clazz = classLoader.findClassByName(className, false);
         if (clazz == null) {
-            throw new JsonParseException("class not found");
+            throw new JSONParserException("Class " + className + " not found");
         }
+
         registry.register(clazz);
-        if (getAsBoolean(classObject, "allDeclaredMethods", false)) {
-            registry.register(clazz.getDeclaredMethods());
-        }
-        if (getAsBoolean(classObject, "allPublicMethods", false)) {
-            registry.register(clazz.getMethods());
-        }
-        if (getAsBoolean(classObject, "allDeclaredFields", false)) {
-            registry.register(clazz.getDeclaredFields());
-        }
-        if (getAsBoolean(classObject, "allPublicFields", false)) {
-            registry.register(clazz.getFields());
-        }
-        handleFields(context, classObject.get("fields"), clazz);
-        handleMethods(context, classObject.get("methods"), clazz);
-        context.className = null;
-    }
 
-    private static boolean getAsBoolean(JsonObject object, String name, boolean forNull) {
-        JsonPrimitive primitive = object.getAsJsonPrimitive(name);
-        return (primitive == null) ? forNull : primitive.getAsBoolean();
-    }
-
-    private void handleFields(ParseContext context, JsonElement fieldsElement, Class<?> clazz) {
-        if (fieldsElement != null) { // optional
-            for (JsonElement fieldElement : fieldsElement.getAsJsonArray()) {
-                handleField(context, fieldElement, clazz);
+        for (Map.Entry<String, Object> entry : data.entrySet()) {
+            String name = entry.getKey();
+            Object value = entry.getValue();
+            if (name.equals("name")) {
+                /* Already handled. */
+            } else if (name.equals("allDeclaredConstructors")) {
+                if (asBoolean(value, "allDeclaredConstructors")) {
+                    registry.register(clazz.getDeclaredConstructors());
+                }
+            } else if (name.equals("allPublicConstructors")) {
+                if (asBoolean(value, "allPublicConstructors")) {
+                    registry.register(clazz.getConstructors());
+                }
+            } else if (name.equals("allDeclaredMethods")) {
+                if (asBoolean(value, "allDeclaredMethods")) {
+                    registry.register(clazz.getDeclaredMethods());
+                }
+            } else if (name.equals("allPublicMethods")) {
+                if (asBoolean(value, "allPublicMethods")) {
+                    registry.register(clazz.getMethods());
+                }
+            } else if (name.equals("allDeclaredFields")) {
+                if (asBoolean(value, "allDeclaredFields")) {
+                    registry.register(false, clazz.getDeclaredFields());
+                }
+            } else if (name.equals("allPublicFields")) {
+                if (asBoolean(value, "allPublicFields")) {
+                    registry.register(false, clazz.getFields());
+                }
+            } else if (name.equals("methods")) {
+                parseMethods(asList(value, "Attribute 'methods' must be an array of method descriptors"), clazz);
+            } else if (name.equals("fields")) {
+                parseFields(asList(value, "Attribute 'fields' must be an array of field descriptors"), clazz);
+            } else {
+                throw new JSONParserException("Unknown attribute '" + name +
+                                "' (supported attributes: allDeclaredConstructors, allPublicConstructors, allDeclaredMethods, allPublicMethods, allDeclaredFields, allPublicFields, methods, fields) in defintion of class " +
+                                clazz.getTypeName());
             }
         }
     }
 
-    private void handleField(ParseContext context, JsonElement fieldElement, Class<?> clazz) {
-        JsonObject fieldObject = fieldElement.getAsJsonObject();
-        expectMembers(fieldObject, "name");
-        String fieldName = fieldObject.get("name").getAsString();
-        context.memberName = fieldName;
+    private void parseFields(List<Object> fields, Class<?> clazz) {
+        for (Object field : fields) {
+            parseField(asMap(field, "Elements of 'fields' array must be field descriptor objects"), clazz);
+        }
+    }
+
+    private void parseField(Map<String, Object> data, Class<?> clazz) {
+        String fieldName = null;
+        boolean allowWrite = false;
+        for (Map.Entry<String, Object> entry : data.entrySet()) {
+            String propertyName = entry.getKey();
+            if (propertyName.equals("name")) {
+                fieldName = asString(entry.getValue(), "name");
+            } else if (propertyName.equals("allowWrite")) {
+                allowWrite = asBoolean(entry.getValue(), "allowWrite");
+            } else {
+                throw new JSONParserException("Unknown attribute '" + propertyName + "' (supported attributes: 'name') in definition of field for class '" + clazz.getTypeName() + "'");
+            }
+        }
+
+        if (fieldName == null) {
+            throw new JSONParserException("Missing atribute 'name' in definition of field for class " + clazz.getTypeName());
+        }
+
         try {
-            Field field = clazz.getDeclaredField(fieldName);
-            registry.register(field);
+            registry.register(allowWrite, clazz.getDeclaredField(fieldName));
         } catch (NoSuchFieldException e) {
-            throw bailout("field not found");
-        }
-        context.memberName = null;
-    }
-
-    private void handleMethods(ParseContext context, JsonElement methodsElement, Class<?> clazz) {
-        if (methodsElement != null) { // optional
-            for (JsonElement methodElement : methodsElement.getAsJsonArray()) {
-                handleMethod(context, methodElement, clazz);
-            }
+            throw new JSONParserException("Field " + clazz.getTypeName() + "." + fieldName + " not found");
         }
     }
 
-    private void handleMethod(ParseContext context, JsonElement methodElement, Class<?> clazz) {
-        JsonObject methodObject = methodElement.getAsJsonObject();
-        String name = methodObject.get("name").getAsString();
-        context.memberName = name;
-        expectMembers(methodObject, "name", "parameterTypes");
-        JsonElement parameterTypesElement = methodObject.get("parameterTypes");
-        if (parameterTypesElement != null) {
-            JsonArray array = parameterTypesElement.getAsJsonArray();
-            Class<?>[] parameterTypes = new Class<?>[array.size()];
-            for (int i = 0; i < array.size(); i++) {
-                String originalTypeName = array.get(i).getAsString();
-                String typeName = originalTypeName;
-                if (typeName.indexOf('[') != -1) { // accept "int[][]", "java.lang.String[]"
-                    typeName = MetaUtil.internalNameToJava(MetaUtil.toInternalName(originalTypeName), true, true);
-                }
-                parameterTypes[i] = classLoader.findClassByName(typeName, false);
-                if (parameterTypes[i] == null) {
-                    throw bailout("parameter type " + originalTypeName + " not found");
-                }
+    private void parseMethods(List<Object> methods, Class<?> clazz) {
+        for (Object method : methods) {
+            parseMethod(asMap(method, "Elements of 'methods' array must be method descriptor objects"), clazz);
+        }
+    }
+
+    private void parseMethod(Map<String, Object> data, Class<?> clazz) {
+        String methodName = null;
+        Class<?>[] methodParameterTypes = null;
+        for (Map.Entry<String, Object> entry : data.entrySet()) {
+            String propertyName = entry.getKey();
+            if (propertyName.equals("name")) {
+                methodName = asString(entry.getValue(), "name");
+            } else if (propertyName.equals("parameterTypes")) {
+                methodParameterTypes = parseTypes(asList(entry.getValue(), "Attribute 'parameterTypes' must be a list of type names"));
+            } else {
+                throw new JSONParserException(
+                                "Unknown attribute '" + propertyName + "' (supported attributes: 'name', 'parameterTypes') in definition of method for class '" + clazz.getTypeName() + "'");
             }
+        }
+
+        if (methodName == null) {
+            throw new JSONParserException("Missing attribute 'name' in definition of method for class '" + clazz.getTypeName() + "'");
+        }
+
+        if (methodParameterTypes != null) {
             try {
                 Executable method;
-                if (CONSTRUCTOR_NAME.equals(name)) {
-                    method = clazz.getDeclaredConstructor(parameterTypes);
+                if (CONSTRUCTOR_NAME.equals(methodName)) {
+                    method = clazz.getDeclaredConstructor(methodParameterTypes);
                 } else {
-                    method = clazz.getDeclaredMethod(name, parameterTypes);
+                    method = clazz.getDeclaredMethod(methodName, methodParameterTypes);
                 }
                 registry.register(method);
             } catch (NoSuchMethodException e) {
-                String parameterTypeNames = Stream.of(parameterTypes).map(Class::getSimpleName).collect(Collectors.joining(", "));
-                throw bailout("method with parameter types (" + parameterTypeNames + ") not found");
+                String parameterTypeNames = Stream.of(methodParameterTypes).map(Class::getSimpleName).collect(Collectors.joining(", "));
+                throw new JSONParserException("Method " + clazz.getTypeName() + "." + methodName + "(" + parameterTypeNames + ") not found");
             }
         } else {
             boolean found = false;
-            boolean isConstructor = CONSTRUCTOR_NAME.equals(name);
+            boolean isConstructor = CONSTRUCTOR_NAME.equals(methodName);
             Executable[] methods = isConstructor ? clazz.getDeclaredConstructors() : clazz.getDeclaredMethods();
             for (Executable method : methods) {
-                if (isConstructor || method.getName().equals(name)) {
+                if (isConstructor || method.getName().equals(methodName)) {
                     registry.register(method);
                     found = true;
                 }
             }
             if (!found) {
-                throw bailout("method not found");
+                throw new JSONParserException("Method " + clazz.getTypeName() + "." + methodName + " not found");
             }
         }
-        context.memberName = null;
     }
+
+    private Class<?>[] parseTypes(List<Object> types) {
+        List<Class<?>> result = new ArrayList<>();
+        for (Object type : types) {
+            String typeName = asString(type, "types");
+            if (typeName.indexOf('[') != -1) {
+                /* accept "int[][]", "java.lang.String[]" */
+                typeName = MetaUtil.internalNameToJava(MetaUtil.toInternalName(typeName), true, true);
+            }
+            Class<?> clazz = classLoader.findClassByName(typeName, false);
+            if (clazz == null) {
+                throw new JSONParserException("Class " + typeName + " not found");
+            }
+            result.add(clazz);
+        }
+        return result.toArray(new Class<?>[result.size()]);
+    }
+
 }

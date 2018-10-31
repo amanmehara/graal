@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -97,7 +99,7 @@ public final class AssertSnippets extends SubstrateTemplates implements Snippets
                      * type, which is not the case for types just checked by the assertions we
                      * introduce.
                      */
-                    return expectedHub.asClass().isAssignableFrom(object.getClass());
+                    return DynamicHub.toClass(expectedHub).isAssignableFrom(object.getClass());
                 }
             } else {
                 return true;
